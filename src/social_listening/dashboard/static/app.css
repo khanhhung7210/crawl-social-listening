@@ -178,6 +178,8 @@ body {
 
 .content {
   padding: 28px;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .topbar {
@@ -225,6 +227,7 @@ h1 {
   padding: 14px;
   min-width: 320px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .filter-field {
@@ -278,20 +281,25 @@ button[disabled] {
   margin-bottom: 18px;
 }
 
+.metrics-grid > *,
+.panel-grid > * {
+  min-width: 0;
+}
+
 .metrics-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .panel-grid-top {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(360px, 1.3fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .panel-grid-middle {
-  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
 }
 
 .panel-grid-bottom {
-  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 1fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .methodology-grid {
@@ -342,6 +350,7 @@ button[disabled] {
 .panel {
   padding: 20px;
   transition: transform 160ms ease, box-shadow 160ms ease;
+  overflow: hidden;
 }
 
 .panel:hover {
@@ -372,6 +381,7 @@ button[disabled] {
   grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
   gap: 20px;
   align-items: center;
+  min-width: 0;
 }
 
 .donut {
@@ -414,6 +424,7 @@ button[disabled] {
 .legend {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .legend-row {
@@ -433,9 +444,17 @@ button[disabled] {
   font-weight: 700;
 }
 
+.legend-row span:nth-child(2) {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bar-list {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .bar-row {
@@ -538,6 +557,10 @@ th {
 
 .mobile-rail-toggle {
   display: none;
+  min-width: 96px;
+  background: linear-gradient(135deg, #162746, #223a67);
+  color: white;
+  border: none;
 }
 
 #refresh-button {
@@ -614,6 +637,15 @@ th {
     align-items: center;
     justify-content: center;
   }
+
+  .topbar {
+    align-items: stretch;
+  }
+
+  .filter-bar {
+    width: 100%;
+    justify-content: stretch;
+  }
 }
 
 @media (max-width: 768px) {
@@ -638,6 +670,7 @@ th {
     flex-direction: column;
     align-items: stretch;
     min-width: 0;
+    padding: 12px;
   }
 
   #refresh-button,
@@ -647,6 +680,10 @@ th {
 
   .donut-layout {
     grid-template-columns: 1fr;
+  }
+
+  .legend-row {
+    grid-template-columns: auto 1fr auto;
   }
 
   .bar-row {

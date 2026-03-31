@@ -4,8 +4,11 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+load_dotenv(PROJECT_ROOT / ".env")
 
 from social_listening.dashboard import run_dev_server
 

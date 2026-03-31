@@ -236,6 +236,8 @@ async function populateFilms(selectedFilm) {
   `).join("");
   if (selectedFilm && films.includes(selectedFilm)) {
     select.value = selectedFilm;
+  } else if (films.length) {
+    select.value = films[0];
   }
 }
 
