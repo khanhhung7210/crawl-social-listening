@@ -95,6 +95,12 @@ function renderDonut(containerId, rows, labelKey, valueKey, totalLabel) {
 }
 
 function renderBarList(containerId, rows, labelKey, valueKey) {
+  if (!rows.length) {
+    document.getElementById(containerId).innerHTML = `
+      <div class="empty-state"><div><strong>No sources</strong><span>Chưa có nguồn nào cho phim này.</span></div></div>
+    `;
+    return;
+  }
   const maxValue = Math.max(...rows.map((row) => Number(row[valueKey] || 0)), 1);
   document.getElementById(containerId).innerHTML = `
     <div class="bar-list">
@@ -145,7 +151,7 @@ function renderFeedbackList(containerId, rows, tone) {
         </div>
       `).join("")}
     </div>
-  ` : `<div class="empty">No comments</div>`;
+  ` : `<div class="empty-state"><div><strong>No comments</strong><span>Chưa có comment phù hợp cho phần này.</span></div></div>`;
   document.getElementById(containerId).innerHTML = content;
 }
 
@@ -269,6 +275,10 @@ async function bootstrap() {
     await loadReport(filmTitle);
     document.querySelector(".shell")?.classList.remove("rail-open");
   });
+
+  if (window.innerWidth >= 1280) {
+    document.querySelector(".shell")?.classList.add("rail-collapsed");
+  }
 }
 
 bootstrap().catch((error) => {

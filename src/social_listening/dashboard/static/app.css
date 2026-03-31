@@ -43,7 +43,7 @@ body {
 }
 
 .shell.rail-collapsed {
-  grid-template-columns: 92px 1fr;
+  grid-template-columns: 68px 1fr;
 }
 
 .rail {
@@ -59,7 +59,8 @@ body {
 }
 
 .shell.rail-collapsed .rail {
-  padding-inline: 16px;
+  padding-inline: 10px;
+  align-items: center;
 }
 
 .rail-toggle,
@@ -70,8 +71,8 @@ body {
 }
 
 .rail-toggle {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -142,6 +143,8 @@ body {
 
 .shell.rail-collapsed .brand {
   justify-content: center;
+  padding-bottom: 0;
+  border-bottom-color: transparent;
 }
 
 .shell.rail-collapsed .brand-copy,
@@ -149,6 +152,10 @@ body {
   opacity: 0;
   transform: translateX(-10px);
   pointer-events: none;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 .rail-card {
@@ -216,7 +223,7 @@ h1 {
   box-shadow: var(--shadow);
   border-radius: var(--radius-lg);
   padding: 14px;
-  min-width: 360px;
+  min-width: 320px;
   flex-wrap: wrap;
 }
 
@@ -533,6 +540,10 @@ th {
   display: none;
 }
 
+#refresh-button {
+  min-width: 108px;
+}
+
 .text-positive {
   color: var(--green);
 }
@@ -586,6 +597,10 @@ th {
     transform: translateX(0);
   }
 
+  .shell.rail-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .metrics-grid,
   .panel-grid-top,
   .panel-grid-middle,
@@ -623,6 +638,11 @@ th {
     flex-direction: column;
     align-items: stretch;
     min-width: 0;
+  }
+
+  #refresh-button,
+  .mobile-rail-toggle {
+    width: 100%;
   }
 
   .donut-layout {
