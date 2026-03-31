@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Social Listening Report</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <button type="button" class="rail-toggle" id="rail-toggle" aria-label="Toggle sidebar">
+          <span></span>
+          <span></span>
+        </button>
+        <div class="brand">
+          <div class="brand-mark">SL</div>
+          <div class="brand-copy">
+            <div class="brand-kicker">Analytics</div>
+            <div class="brand-title">Social Listening</div>
+          </div>
+        </div>
+        <div class="rail-card">
+          <div class="rail-label">Mode</div>
+          <div class="rail-value">Report Dashboard</div>
+        </div>
+        <div class="rail-card">
+          <div class="rail-label">Visual Style</div>
+          <div class="rail-value">Elastic-like executive view</div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">Social Listening Executive Dashboard</div>
+            <h1 id="page-title">Loading report...</h1>
+            <p class="subcopy">Tổng hợp sentiment, platform mix, top sources và phản hồi thực tế theo từng phim.</p>
+            <div class="tag-row hero-tags" id="hero-tags"></div>
+          </div>
+          <form id="filter-form" class="filter-bar">
+            <button type="button" class="mobile-rail-toggle" id="mobile-rail-toggle">Menu</button>
+            <label class="filter-field">
+              <span>Film title</span>
+              <select id="film-title" name="film_title"></select>
+            </label>
+            <button type="submit" id="refresh-button">Refresh</button>
+          </form>
+        </header>
+
+        <section class="metrics-grid" id="metrics-grid"></section>
+
+        <section class="panel-grid panel-grid-top">
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Social media type</h2>
+              <span id="media-total" class="panel-meta"></span>
+            </div>
+            <div id="media-type-card"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Social media platforms</h2>
+              <span id="platform-total" class="panel-meta"></span>
+            </div>
+            <div id="platform-share-card"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Top source by mentions</h2>
+              <span class="panel-meta">Buzz volume by source</span>
+            </div>
+            <div id="top-sources-card"></div>
+          </article>
+        </section>
+
+        <section class="panel-grid panel-grid-middle">
+          <article class="panel panel-table">
+            <div class="panel-header">
+              <h2>Platform sentiment</h2>
+              <span class="panel-meta">tblSentiment overview</span>
+            </div>
+            <div id="platform-table"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Sentiment score</h2>
+              <span class="panel-meta">Positive / Negative / Neutral</span>
+            </div>
+            <div id="sentiment-card"></div>
+          </article>
+        </section>
+
+        <section class="panel-grid panel-grid-bottom">
+          <article class="panel panel-table">
+            <div class="panel-header">
+              <h2>Real feedbacks by topic</h2>
+              <span class="panel-meta">Derived from comments in tblSocial</span>
+            </div>
+            <div id="topic-table"></div>
+          </article>
+
+          <article class="panel feedback-panel">
+            <div class="panel-header">
+              <h2>Positive feedbacks</h2>
+              <span class="panel-meta">Sample comments</span>
+            </div>
+            <div id="positive-feedback"></div>
+          </article>
+
+          <article class="panel feedback-panel">
+            <div class="panel-header">
+              <h2>Negative feedbacks</h2>
+              <span class="panel-meta">Sample comments</span>
+            </div>
+            <div id="negative-feedback"></div>
+          </article>
+        </section>
+
+        <section class="panel-grid methodology-grid">
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Positive methodology</h2>
+            </div>
+            <div id="positive-rules"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-header">
+              <h2>Negative methodology</h2>
+            </div>
+            <div id="negative-rules"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
