@@ -27,7 +27,7 @@ def create_app(repository: MongoDashboardRepository | None = None):
             if path == "/":
                 return respond_file(start_response, STATIC_DIR / "index.html", "text/html; charset=utf-8")
             if path.startswith("/static/"):
-                relative = path.removeprefix("/static/")
+                relative = path[len("/static/") :]
                 target = (STATIC_DIR / relative).resolve()
                 if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.exists():
                     return respond_json(start_response, {"error": "Not found"}, status="404 Not Found")
