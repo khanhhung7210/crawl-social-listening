@@ -22,6 +22,7 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
+from social_listening.crawl_state import IncrementalCrawlState
 
 
 DEBUGGER_ADDRESS = os.getenv("YOUTUBE_DEBUGGER_ADDRESS", "127.0.0.1:9225")
@@ -46,7 +47,9 @@ def main() -> int:
 
     video_urls = [item for item in video_urls if item.get("url")]
     if not video_urls:
-        raise RuntimeError("No YouTube video URLs found.")
+        print("[youtube-detail] No YouTube video URLs found - nothing to crawl")
+        print(f"[youtube-detail] This is normal for incremental runs with no new content")
+        return 0
 
     print(f"using youtube input file: {input_file}")
 
@@ -57,29 +60,49 @@ def main() -> int:
         print(f"no pending videos; {len(records)} records already saved in {OUTPUT_FILE.resolve()}")
         return 0
 
-    driver = build_driver()
-    try:
-        total = len(pending_urls)
-        for index, item in enumerate(pending_urls, start=1):
-            url = item["url"]
-            keyword = item["keyword"]
-            try:
-                record = crawl_video(driver, url, keyword, search_terms)
-            except Exception as exc:
-                record = {
-                    "keyword": keyword,
-                    "url": url,
-                    "matched": False,
-                    "error": str(exc),
-                }
-            records.append(record)
-            save_records(OUTPUT_FILE, records)
-            print(f"[{index}/{total}] saved {url}")
+    with IncrementalCrawlState() as state:
+        run_id = state.start_run("youtube_detail", "incremental")
+        urls_crawled = 0
+        urls_skipped = len(existing_urls)
 
-        print(f"saved {len(records)} total youtube payloads to {OUTPUT_FILE.resolve()}")
-        return 0
-    finally:
-        driver.quit()
+        print(f"[youtube-detail] URLs to crawl: {len(pending_urls)}")
+        print(f"[youtube-detail] URLs skipped: {urls_skipped}")
+
+        driver = build_driver()
+        try:
+            total = len(pending_urls)
+            for index, item in enumerate(pending_urls, start=1):
+                url = item["url"]
+                keyword = item["keyword"]
+                try:
+                    record = crawl_video(driver, url, keyword, search_terms)
+                    # Extract timestamp if available
+                    content_timestamp = record.get("published_at") or record.get("crawled_at")
+                    state.mark_crawled(url, "youtube_detail", keyword, content_timestamp)
+                    urls_crawled += 1
+                except Exception as exc:
+                    record = {
+                        "keyword": keyword,
+                        "url": url,
+                        "matched": False,
+                        "error": str(exc),
+                    }
+                records.append(record)
+                save_records(OUTPUT_FILE, records)
+                print(f"[{index}/{total}] saved {url}")
+
+            state.complete_run(
+                run_id,
+                urls_discovered=len(video_urls),
+                urls_crawled=urls_crawled,
+                urls_skipped=urls_skipped,
+                keywords_processed=len(set(item["keyword"] for item in video_urls))
+            )
+
+            print(f"saved {len(records)} total youtube payloads to {OUTPUT_FILE.resolve()}")
+            return 0
+        finally:
+            driver.quit()
 
 
 def resolve_input_file() -> Path:

@@ -21,6 +21,8 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
+from social_listening.instagram_comment_parser import extract_instagram_comments_from_body_text
+from social_listening.crawl_state import IncrementalCrawlState
 
 
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
@@ -41,38 +43,72 @@ def main() -> int:
 
     post_urls = [item for item in post_urls if item.get("url")]
     if not post_urls:
-        raise RuntimeError("No Instagram post URLs found.")
+        print("[instagram-detail] No Instagram post URLs found - nothing to crawl")
+        print(f"[instagram-detail] This is normal for incremental runs with no new content")
+        return 0
 
     records = load_existing_records(OUTPUT_FILE)
     existing_urls = collect_existing_post_urls(records)
     pending_urls = [item for item in post_urls if item["url"] not in existing_urls]
+
+    print(f"[instagram-detail] Total URLs: {len(post_urls)}")
+    print(f"[instagram-detail] Already crawled: {len(existing_urls)}")
+    print(f"[instagram-detail] Pending: {len(pending_urls)}")
+
     if not pending_urls:
         print(f"no pending posts; {len(records)} records already saved in {OUTPUT_FILE.resolve()}")
         return 0
 
-    driver = build_driver()
-    try:
-        total = len(pending_urls)
-        for index, item in enumerate(pending_urls, start=1):
-            url = item["url"]
-            keyword = item["keyword"]
-            try:
-                record = crawl_post(driver, url, keyword, search_terms)
-            except Exception as exc:
-                record = {
-                    "keyword": keyword,
-                    "url": url,
-                    "matched": False,
-                    "error": str(exc),
-                }
-            records.append(record)
-            save_records(OUTPUT_FILE, records)
-            print(f"[{index}/{total}] saved {url}")
+    with IncrementalCrawlState() as state:
+        run_id = state.start_run("instagram_detail", "incremental")
 
-        print(f"saved {len(records)} total instagram payloads to {OUTPUT_FILE.resolve()}")
-        return 0
-    finally:
-        driver.quit()
+        driver = build_driver()
+        try:
+            total = len(pending_urls)
+            crawled_count = 0
+
+            for index, item in enumerate(pending_urls, start=1):
+                url = item["url"]
+                keyword = item["keyword"]
+                try:
+                    record = crawl_post(driver, url, keyword, search_terms)
+                    crawled_count += 1
+
+                    # Extract timestamp if available
+                    content_timestamp = record.get("timestamp") or record.get("taken_at_timestamp")
+
+                    # Mark as crawled
+                    state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
+
+                except Exception as exc:
+                    record = {
+                        "keyword": keyword,
+                        "url": url,
+                        "matched": False,
+                        "error": str(exc),
+                    }
+
+                records.append(record)
+                save_records(OUTPUT_FILE, records)
+                print(f"[{index}/{total}] saved {url}")
+
+            # Complete run
+            state.complete_run(
+                run_id,
+                urls_discovered=len(post_urls),
+                urls_crawled=crawled_count,
+                urls_skipped=len(existing_urls),
+                keywords_processed=len(set(item.get("keyword", "") for item in post_urls))
+            )
+
+            print(f"[instagram-detail] Summary:")
+            print(f"  - URLs crawled: {crawled_count}")
+            print(f"  - URLs skipped: {len(existing_urls)}")
+            print(f"  - Total saved: {len(records)}")
+            print(f"  - Output: {OUTPUT_FILE.resolve()}")
+            return 0
+        finally:
+            driver.quit()
 
 
 def load_post_urls(path: Path) -> list[dict]:
@@ -162,7 +198,7 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
     current_url = normalize_instagram_post_url(driver.current_url or url) or url
     page_title = driver.title or ""
     crawled_at = datetime.now(timezone.utc).isoformat()
-    comments = crawl_comments(driver, current_url)
+    comments = crawl_comments(driver, current_url, body_text)
     matched_terms = [term for term in search_terms if contains_keyword(normalize_text(body_text), term)]
 
     return {
@@ -219,7 +255,7 @@ def click_expand_buttons(driver: webdriver.Chrome) -> None:
                 continue
 
 
-def crawl_comments(driver: webdriver.Chrome, post_url: str) -> list[dict]:
+def crawl_comments(driver: webdriver.Chrome, post_url: str, body_text: str) -> list[dict]:
     comments: dict[str, dict] = {}
     idle_rounds = 0
     for _ in range(MAX_COMMENT_SCROLL_ROUNDS):
@@ -239,7 +275,9 @@ def crawl_comments(driver: webdriver.Chrome, post_url: str) -> list[dict]:
             idle_rounds += 1
         if idle_rounds >= COMMENT_IDLE_ROUNDS_BEFORE_STOP:
             break
-    return list(comments.values())
+    if comments:
+        return list(comments.values())
+    return extract_instagram_comments_from_body_text(body_text, post_url)
 
 
 def extract_comments_from_dom(driver: webdriver.Chrome, post_url: str) -> list[dict]:

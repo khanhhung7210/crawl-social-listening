@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.film_paths import platform_processed_dir, platform_raw_dir
+from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.paths import DATA_DIR, ensure_dir
 
 
@@ -32,15 +33,28 @@ ACTIVITY_MARKERS = {"View activity", "Xem hoạt động"}
 
 
 def main() -> int:
+    if not INPUT_FILE.exists():
+        print(f"[threads-format] Input file not found: {INPUT_FILE}")
+        print(f"[threads-format] This is normal when no URLs were crawled - nothing to format")
+        return 0
+
     payload = json.loads(INPUT_FILE.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise RuntimeError("threads_all_threads.json must be a JSON array")
+
+    if not payload:
+        print(f"[threads-format] Input file is empty - nothing to format")
+        return 0
+
+    keyword_payload = load_keyword_payload()
+    active_film_title = str(keyword_payload.get("film_title") or "").strip()
+    active_keywords = collect_search_terms(keyword_payload)
 
     records: list[dict] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
-        parsed = parse_thread_record(item)
+        parsed = parse_thread_record(item, active_film_title, active_keywords)
         if parsed:
             records.append(parsed)
 
@@ -50,7 +64,7 @@ def main() -> int:
     return 0
 
 
-def parse_thread_record(item: dict) -> dict:
+def parse_thread_record(item: dict, film_title: str, keywords: list[str]) -> dict:
     body_text = str(item.get("body_text") or "")
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     if len(lines) < 5:
@@ -85,12 +99,28 @@ def parse_thread_record(item: dict) -> dict:
         "post_url": post_url,
         "post_created_at": post_created_at,
         "post_text": post_text,
+        "film_title": film_title,
+        "keywords": keywords,
         "post_keyword_match": False,
         "parent_keyword_match": bool(post_text or comments),
+        "search_keyword": str(item.get("keyword") or "").strip(),
+        "search_keywords": normalize_keywords(item.get("keywords")),
         "source": SOURCE_NAME,
         "source_file": str(INPUT_FILE),
         "comments": comments,
     }
+
+
+def normalize_keywords(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    terms: list[str] = []
+    for item in value:
+        term = str(item or "").strip()
+        if term and term not in terms:
+            terms.append(term)
+    return terms
 
 
 def parse_comments(lines: list[str], top_index: int, post_id: str) -> list[dict]:
@@ -161,10 +191,13 @@ def looks_like_username(value: str) -> bool:
 
 
 def is_date_line(value: str) -> bool:
+    compact = value.strip().casefold()
     return (
-        bool(re.fullmatch(r"\d{2}/\d{2}/\d{2}", value))
-        or bool(re.fullmatch(r"\d{2}/\d{2}/\d{4}", value))
-        or bool(re.fullmatch(r"\d+[dhmw]d?", value))
+        bool(re.fullmatch(r"\d{2}/\d{2}/\d{2}", compact))
+        or bool(re.fullmatch(r"\d{2}/\d{2}/\d{4}", compact))
+        or bool(re.fullmatch(r"\d+[smhdw]", compact))
+        or bool(re.fullmatch(r"\d+\s*(sec|secs|second|seconds|min|mins|minute|minutes|hour|hours|day|days|week|weeks)", compact))
+        or bool(re.fullmatch(r"\d+\s*(giay|giây|phut|phút|gio|giờ|ngay|ngày|tuan|tuần)", compact))
     )
 
 

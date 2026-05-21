@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.film_paths import film_slug, platform_processed_dir
+from social_listening.fnb_relevance import evaluate_fnb_relevance
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.text_utils import contains_keyword
 
@@ -41,7 +42,7 @@ def main() -> int:
                     print(f"[skip] invalid json path={path} line={line_number}: {exc}")
                     continue
 
-                grouped_post = build_grouped_post(post, search_terms, page_id, page_name, path)
+                grouped_post = build_grouped_post(post, search_terms, keyword_payload, page_id, page_name, path)
                 if grouped_post:
                     records.append(grouped_post)
 
@@ -51,6 +52,7 @@ def main() -> int:
 def build_grouped_post(
     post: dict,
     search_terms: list[str],
+    keyword_payload: dict,
     page_id: str,
     page_name: str,
     source_path: Path,
@@ -68,7 +70,7 @@ def build_grouped_post(
     if not parent_keyword_match:
         return {}
 
-    return {
+    candidate = {
         "platform": "facebook",
         "post_id": post_id,
         "page_id": page_id,
@@ -91,6 +93,14 @@ def build_grouped_post(
             )
             for item in comment_items
         ],
+    }
+    fnb_relevance = evaluate_fnb_relevance(candidate, keyword_payload)
+    if not fnb_relevance["is_relevant_fnb"]:
+        return {}
+
+    return {
+        **candidate,
+        "fnb_relevance": fnb_relevance,
     }
 
 

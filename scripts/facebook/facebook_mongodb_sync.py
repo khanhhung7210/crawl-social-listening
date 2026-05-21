@@ -9,17 +9,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import film_title
 from social_listening.film_paths import platform_processed_dir
-from social_listening.mongodb_sync import MongoSyncConfig, sync_json_file
+from social_listening.mongodb_sync import MongoSyncConfig, sync_preformatted_json_file
 from social_listening.paths import DATA_DIR
 
 
 def main() -> int:
     config = MongoSyncConfig(
-        input_file=Path(os.getenv("INPUT_FILE", str(platform_processed_dir("facebook") / "facebook_keyword_mentions.json"))),
-        input_label="facebook_keyword_mentions.json",
+        input_file=Path(os.getenv("INPUT_FILE", str(platform_processed_dir("facebook") / "facebook_formatted_mentions.json"))),
+        input_label="facebook_formatted_mentions.json",
         film_title=os.getenv("FILM_TITLE", film_title()),
     )
-    return sync_json_file(config)
+    return sync_preformatted_json_file(config)
 
 
 if __name__ == "__main__":

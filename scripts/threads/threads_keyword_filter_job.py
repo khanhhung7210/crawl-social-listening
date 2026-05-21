@@ -8,9 +8,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload
+from social_listening.fnb_relevance import evaluate_fnb_relevance
 from social_listening.film_paths import platform_processed_dir
 from social_listening.paths import DATA_DIR, ensure_dir
-from social_listening.text_utils import contains_keyword
+from social_listening.text_utils import normalize_text
 
 
 INPUT_FILE = platform_processed_dir("threads") / "threads_grouped_parsed.json"
@@ -20,8 +21,11 @@ SOURCE_NAME = "threads_keyword_filter_job"
 
 def main() -> int:
     if not INPUT_FILE.exists():
-        raise RuntimeError(f"Missing input file: {INPUT_FILE}")
-    search_terms = collect_search_terms(load_keyword_payload())
+        print(f"[threads-filter] Input file not found: {INPUT_FILE}")
+        print(f"[threads-filter] This is normal when no data was formatted - nothing to filter")
+        return 0
+    keyword_payload = load_keyword_payload()
+    search_terms = collect_search_terms(keyword_payload)
     if not search_terms:
         raise RuntimeError("No search terms found in shared keyword config")
 
@@ -33,7 +37,7 @@ def main() -> int:
     for item in payload:
         if not isinstance(item, dict):
             continue
-        filtered = build_filtered_record(item, search_terms)
+        filtered = build_filtered_record(item, search_terms, keyword_payload)
         if filtered:
             records.append(filtered)
 
@@ -43,7 +47,7 @@ def main() -> int:
     return 0
 
 
-def build_filtered_record(item: dict, search_terms: list[str]) -> dict:
+def build_filtered_record(item: dict, search_terms: list[str], keyword_payload: dict) -> dict:
     post_text = str(item.get("post_text") or "")
     post_keyword_matches = find_matches(post_text, search_terms)
     post_keyword_match = bool(post_keyword_matches)
@@ -63,18 +67,34 @@ def build_filtered_record(item: dict, search_terms: list[str]) -> dict:
     if not parent_keyword_match:
         return {}
 
-    return {
+    candidate = {
         **item,
         "post_keyword_match": post_keyword_match,
         "post_keyword_matches": post_keyword_matches,
         "parent_keyword_match": parent_keyword_match,
+        "matched_search_keyword": str(item.get("search_keyword") or "").strip(),
+        "matched_search_keywords": item.get("search_keywords") or [],
         "source": SOURCE_NAME,
         "comments": comments,
+    }
+    fnb_relevance = evaluate_fnb_relevance(candidate, keyword_payload)
+    if not fnb_relevance["is_relevant_fnb"]:
+        return {}
+
+    return {
+        **candidate,
+        "fnb_relevance": fnb_relevance,
     }
 
 
 def find_matches(text: str, search_terms: list[str]) -> list[str]:
-    return [term for term in search_terms if contains_keyword(text, term)]
+    normalized_text = f" {normalize_text(text)} "
+    matched_terms: list[str] = []
+    for term in search_terms:
+        tokens = [token for token in normalize_text(term).split(" ") if token]
+        if any(f" {token} " in normalized_text for token in tokens):
+            matched_terms.append(term)
+    return matched_terms
 
 
 if __name__ == "__main__":

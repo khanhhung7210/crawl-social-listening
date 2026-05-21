@@ -21,15 +21,20 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
+from social_listening.crawl_state import IncrementalCrawlState
 
 
 DEBUGGER_ADDRESS = os.getenv("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9222")
-THREAD_URL = "https://www.threads.com/@lottecinema_vietnam/post/DVj9I9wkoDh"
+THREAD_URL = os.getenv("THREADS_URL", "")
+THREADS_INPUT_FILE = os.getenv("THREADS_INPUT_FILE", "").strip()
+THREADS_USE_FILTERED_INPUT = os.getenv("THREADS_USE_FILTERED_INPUT", "1").strip().lower() in {"1", "true", "yes", "on"}
 FILTERED_INPUT_FILE = platform_raw_dir("threads") / "threads_search_results_filtered.json"
 INPUT_FILE = platform_raw_dir("threads") / "threads_search_results.json"
 LEGACY_FILTERED_INPUT_FILE = DATA_DIR / "threads" / "raw" / "threads_search_results_filtered.json"
 LEGACY_INPUT_FILE = DATA_DIR / "threads" / "raw" / "threads_search_results.json"
-SCROLL_SECONDS_PER_THREAD = 4
+MAX_SCROLL_ROUNDS_PER_THREAD = int(os.getenv("THREADS_REPLY_SCROLL_ROUNDS", "12"))
+SCROLL_PAUSE_SECONDS = float(os.getenv("THREADS_REPLY_SCROLL_PAUSE_SECONDS", "1.5"))
+IDLE_ROUNDS_BEFORE_STOP = int(os.getenv("THREADS_REPLY_IDLE_ROUNDS", "3"))
 OUTPUT_FILE = platform_raw_dir("threads") / "threads_all_threads.json"
 
 
@@ -38,47 +43,102 @@ def main() -> int:
     input_file = resolve_input_file()
     thread_urls = load_thread_urls(input_file)
     if not thread_urls and THREAD_URL.strip():
-        thread_urls = [{"keyword": "", "url": THREAD_URL.strip()}]
+        normalized_url = normalize_thread_url(THREAD_URL.strip())
+        if normalized_url:
+            thread_urls = [{"keyword": "", "keywords": [], "url": normalized_url}]
 
     if not thread_urls:
-        raise RuntimeError("No thread URLs found.")
+        print("[threads-detail] No thread URLs found - nothing to crawl")
+        print(f"[threads-detail] This is normal for incremental runs with no new content")
+        return 0
 
     print(f"using thread input file: {input_file}")
 
-    driver = build_driver()
-    try:
-        ensure_dir(OUTPUT_FILE.parent)
-        records = load_existing_records(OUTPUT_FILE)
-        processed_urls = {normalize_thread_url(str(item.get("url") or "").strip()) for item in records if isinstance(item, dict)}
-        total = len(thread_urls)
-        for index, item in enumerate(thread_urls, start=1):
-            url = item["url"]
-            search_keyword = item["keyword"]
-            if url in processed_urls:
-                print(f"[{index}/{total}] skip already processed {url}")
-                continue
-            try:
-                record = crawl_thread(driver, url, search_keyword, search_terms)
-            except Exception as exc:
-                record = {
-                    "keyword": search_keyword,
-                    "url": url,
-                    "matched": False,
-                    "error": str(exc),
-                }
-            records.append(record)
-            processed_urls.add(url)
-            save_records(records, OUTPUT_FILE)
-            print(f"[{index}/{total}] {url}")
+    # Initialize crawl state for detail crawling
+    with IncrementalCrawlState() as state:
+        run_id = state.start_run("threads_detail", "incremental")
 
-        print(f"saved {len(records)} thread payloads to {OUTPUT_FILE.resolve()}")
-        return 0
-    finally:
-        driver.quit()
+        driver = build_driver()
+        try:
+            ensure_dir(OUTPUT_FILE.parent)
+            records = load_existing_records(OUTPUT_FILE)
+            processed_urls = {normalize_thread_url(str(item.get("url") or "").strip()) for item in records if isinstance(item, dict)}
+
+            print(f"[threads-detail] Total URLs to process: {len(thread_urls)}")
+            print(f"[threads-detail] Already processed: {len(processed_urls)}")
+
+            crawled_count = 0
+            skipped_count = 0
+            total = len(thread_urls)
+
+            for index, item in enumerate(thread_urls, start=1):
+                url = item["url"]
+                search_keyword = item["keyword"]
+                search_keywords = item.get("keywords") or ([search_keyword] if search_keyword else [])
+
+                if url in processed_urls:
+                    print(f"[{index}/{total}] skip already processed {url}")
+                    skipped_count += 1
+                    continue
+
+                try:
+                    record = crawl_thread(driver, url, search_keyword, search_keywords, search_terms)
+                    crawled_count += 1
+
+                    # Extract timestamp if available
+                    content_timestamp = record.get("timestamp") or record.get("created_time")
+
+                    # Mark as crawled in state
+                    state.mark_crawled(
+                        url,
+                        "threads_detail",
+                        search_keyword,
+                        content_timestamp
+                    )
+
+                except Exception as exc:
+                    record = {
+                        "keyword": search_keyword,
+                        "keywords": search_keywords,
+                        "url": url,
+                        "matched": False,
+                        "error": str(exc),
+                    }
+
+                records.append(record)
+                processed_urls.add(url)
+                save_records(records, OUTPUT_FILE)
+                print(f"[{index}/{total}] {url}")
+
+            # Complete run tracking
+            state.complete_run(
+                run_id,
+                urls_discovered=total,
+                urls_crawled=crawled_count,
+                urls_skipped=skipped_count,
+                keywords_processed=len(set(item.get("keyword", "") for item in thread_urls))
+            )
+
+            print(f"[threads-detail] Summary:")
+            print(f"  - URLs crawled: {crawled_count}")
+            print(f"  - URLs skipped: {skipped_count}")
+            print(f"  - Total saved: {len(records)}")
+            print(f"  - Output: {OUTPUT_FILE.resolve()}")
+            return 0
+        finally:
+            driver.quit()
 
 
 def resolve_input_file() -> Path:
-    for path in (FILTERED_INPUT_FILE, INPUT_FILE, LEGACY_FILTERED_INPUT_FILE, LEGACY_INPUT_FILE):
+    if THREADS_INPUT_FILE:
+        return Path(THREADS_INPUT_FILE)
+
+    candidates = (
+        (FILTERED_INPUT_FILE, INPUT_FILE, LEGACY_FILTERED_INPUT_FILE, LEGACY_INPUT_FILE)
+        if THREADS_USE_FILTERED_INPUT
+        else (INPUT_FILE, FILTERED_INPUT_FILE, LEGACY_INPUT_FILE, LEGACY_FILTERED_INPUT_FILE)
+    )
+    for path in candidates:
         if path.exists():
             return path
     return FILTERED_INPUT_FILE
@@ -96,22 +156,27 @@ def load_thread_urls(path: Path) -> list[dict]:
     if not isinstance(payload, list):
         return []
 
-    urls: list[dict] = []
-    seen: set[str] = set()
+    merged: dict[str, dict] = {}
     for item in payload:
         if not isinstance(item, dict):
             continue
         url = normalize_thread_url(str(item.get("url") or "").strip())
-        if not url or url in seen:
+        if not url:
             continue
-        seen.add(url)
-        urls.append(
+        keyword = str(item.get("keyword") or item.get("search_keyword") or "").strip()
+        current = merged.setdefault(
+            url,
             {
-                "keyword": str(item.get("keyword") or "").strip(),
+                "keyword": keyword,
+                "keywords": [],
                 "url": url,
-            }
+            },
         )
-    return urls
+        if keyword and keyword not in current["keywords"]:
+            current["keywords"].append(keyword)
+        if not current["keyword"] and keyword:
+            current["keyword"] = keyword
+    return list(merged.values())
 
 
 def load_existing_records(path: Path) -> list[dict]:
@@ -128,14 +193,30 @@ def save_records(records: list[dict], path: Path) -> None:
     path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def crawl_thread(driver: webdriver.Chrome, url: str, search_keyword: str, search_terms: list[str]) -> dict:
+def crawl_thread(
+    driver: webdriver.Chrome,
+    url: str,
+    search_keyword: str,
+    search_keywords: list[str],
+    search_terms: list[str],
+) -> dict:
     driver.get(url)
     time.sleep(4)
 
-    deadline = time.time() + max(SCROLL_SECONDS_PER_THREAD, 3)
-    while time.time() < deadline:
+    last_height = 0
+    idle_rounds = 0
+    for _ in range(MAX_SCROLL_ROUNDS_PER_THREAD):
+        expand_reply_buttons(driver)
         driver.execute_script("window.scrollBy(0, window.innerHeight);")
-        time.sleep(1.5)
+        time.sleep(SCROLL_PAUSE_SECONDS)
+        current_height = int(driver.execute_script("return document.body ? document.body.scrollHeight : 0;") or 0)
+        if current_height <= last_height:
+            idle_rounds += 1
+            if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
+                break
+        else:
+            idle_rounds = 0
+            last_height = current_height
 
     articles = driver.find_elements(By.TAG_NAME, "article")
     article_payloads: list[dict] = []
@@ -167,6 +248,7 @@ def crawl_thread(driver: webdriver.Chrome, url: str, search_keyword: str, search
 
     return {
         "keyword": search_keyword,
+        "keywords": search_keywords,
         "url": url,
         "current_url": current_url,
         "title": page_title,
@@ -182,6 +264,30 @@ def crawl_thread(driver: webdriver.Chrome, url: str, search_keyword: str, search
 
 def find_matches(text: str, search_terms: list[str]) -> list[str]:
     return [term for term in search_terms if contains_keyword(text, term)]
+
+
+def expand_reply_buttons(driver: webdriver.Chrome) -> None:
+    xpaths = (
+        "//div[@role='button'][.//span[contains(normalize-space(), 'View replies')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'View more replies')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'View all replies')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'Xem câu trả lời')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'Xem thêm câu trả lời')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'Xem tất cả câu trả lời')]]",
+    )
+    for xpath in xpaths:
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            continue
+        for element in elements[:8]:
+            try:
+                if not element.is_displayed():
+                    continue
+                driver.execute_script("arguments[0].click();", element)
+                time.sleep(0.4)
+            except Exception:
+                continue
 
 
 def build_driver() -> webdriver.Chrome:

@@ -19,6 +19,35 @@ class MongoSyncConfig:
     film_title: str
 
 
+def describe_mongo_target() -> dict[str, object]:
+    mongo_uri = os.getenv("MONGO_URI", "").strip()
+    db_name = os.getenv("MONGO_DB", "CRM")
+    collection_name = os.getenv("MONGO_COLLECTION", "")
+    if mongo_uri:
+        redacted_uri = redact_mongo_uri(mongo_uri)
+        return {
+            "mode": "uri",
+            "uri": redacted_uri,
+            "db": db_name,
+            "collection": collection_name,
+        }
+
+    host = os.getenv("MONGO_HOST", "localhost").strip()
+    port = int(os.getenv("MONGO_PORT", "27018"))
+    user = os.getenv("MONGO_USER", "konis")
+    password = os.getenv("MONGO_PASSWORD", "")
+    auth_source = os.getenv("MONGO_AUTH_SOURCE", db_name)
+    return {
+        "mode": "host_port",
+        "host": host,
+        "port": port,
+        "db": db_name,
+        "collection": collection_name,
+        "auth_source": auth_source if user and password else "",
+        "has_auth": bool(user and password),
+    }
+
+
 def sync_json_file(config: MongoSyncConfig) -> int:
     if not config.input_file.exists():
         raise RuntimeError(f"Missing input file: {config.input_file}")
@@ -34,7 +63,43 @@ def sync_json_file(config: MongoSyncConfig) -> int:
         return 0
 
     db_name = os.getenv("MONGO_DB", "CRM")
-    collection_name = os.getenv("MONGO_COLLECTION", "tblSocial")
+    collection_name = os.getenv("MONGO_COLLECTION", "social")
+    client = build_mongo_client()
+    collection = client[db_name][collection_name]
+
+    operations = [
+        UpdateOne(
+            {"platform": doc["platform"], "post_id": doc["post_id"]},
+            {"$set": doc},
+            upsert=True,
+        )
+        for doc in documents
+    ]
+    result = collection.bulk_write(operations, ordered=False)
+    print(
+        "synced "
+        f"{len(documents)} docs to {db_name}.{collection_name} "
+        f"(upserted={result.upserted_count}, modified={result.modified_count}, matched={result.matched_count})"
+    )
+    return 0
+
+
+def sync_preformatted_json_file(config: MongoSyncConfig) -> int:
+    if not config.input_file.exists():
+        raise RuntimeError(f"Missing input file: {config.input_file}")
+
+    payload = json.loads(config.input_file.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise RuntimeError(f"{config.input_label} must be a JSON array")
+
+    documents = [normalize_preformatted_document(item, config.film_title) for item in payload if isinstance(item, dict)]
+    documents = [doc for doc in documents if doc]
+    if not documents:
+        print("no documents to sync")
+        return 0
+
+    db_name = os.getenv("MONGO_DB", "CRM")
+    collection_name = os.getenv("MONGO_COLLECTION", "social")
     client = build_mongo_client()
     collection = client[db_name][collection_name]
 
@@ -57,10 +122,10 @@ def sync_json_file(config: MongoSyncConfig) -> int:
 
 def build_mongo_client() -> MongoClient:
     mongo_uri = os.getenv("MONGO_URI", "").strip()
-    host = os.getenv("MONGO_HOST", "192.168.0.223")
-    port = int(os.getenv("MONGO_PORT", "27017"))
+    host = os.getenv("MONGO_HOST", "localhost").strip()
+    port = int(os.getenv("MONGO_PORT", "27018"))
     db_name = os.getenv("MONGO_DB", "CRM")
-    user = os.getenv("MONGO_USER", "galaxy")
+    user = os.getenv("MONGO_USER", "konis")
     password = os.getenv("MONGO_PASSWORD", "")
     auth_source = os.getenv("MONGO_AUTH_SOURCE", db_name)
     app_name = os.getenv("MONGO_APP_NAME", "mongosh+1.8.0")
@@ -77,6 +142,34 @@ def build_mongo_client() -> MongoClient:
 
     uri = f"mongodb://{host}:{port}/?directConnection=true&appName={quote_plus(app_name)}"
     return MongoClient(uri, directConnection=True, serverSelectionTimeoutMS=10000)
+
+
+def redact_mongo_uri(uri: str) -> str:
+    return quote_password_placeholder(uri)
+
+
+def quote_password_placeholder(uri: str) -> str:
+    match = uri.split("://", 1)
+    if len(match) != 2:
+        return uri
+    scheme, rest = match
+    if "@" not in rest or ":" not in rest.split("@", 1)[0]:
+        return uri
+    creds, tail = rest.split("@", 1)
+    user, _password = creds.split(":", 1)
+    return f"{scheme}://{user}:***@{tail}"
+
+
+def normalize_preformatted_document(item: dict, film_title: str) -> dict:
+    platform = stringify(item.get("platform"))
+    post_id = item.get("post_id")
+    if not platform or post_id in (None, ""):
+        return {}
+
+    document = {key: value for key, value in item.items() if key != "_id"}
+    if not stringify(document.get("film_title")) and film_title:
+        document["film_title"] = film_title
+    return document
 
 
 def build_mongo_document(item: dict, film_title: str) -> dict:

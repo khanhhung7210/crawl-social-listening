@@ -1,0 +1,2510 @@
+{
+  "merchant": {
+    "ID": "5-C7EZGXTWGVNVV2",
+    "name": "MeiLi - Mì Bò Đài Loan & Mì Sủi Cảo - Mai Văn Vĩnh",
+    "cuisine": "Món Đài Loan",
+    "photoHref": "https://huawei-food-cms.grab.com/compressed_webp/merchants/5-C7EZGXTWGVNVV2/hero/4134ab83a0314e13a8da1c759606f1af_1749635324712686363.webp",
+    "timeZone": "Asia/Ho_Chi_Minh",
+    "ETA": 60,
+    "openingHours": {
+      "displayedHours": "Closed",
+      "sun": "9:00am-10:00pm",
+      "mon": "10:00am-10:00pm",
+      "tue": "9:00am-10:00pm",
+      "wed": "9:00am-10:00pm",
+      "thu": "9:00am-10:00pm",
+      "fri": "9:00am-10:00pm",
+      "sat": "9:00am-10:00pm"
+    },
+    "isIntegrated": true,
+    "distanceInKm": 1148.568,
+    "section": "VNSLT202506110946533237",
+    "latlng": {
+      "latitude": 10.744661442423427,
+      "longitude": 106.71367074600937
+    },
+    "address": {
+      "name": "MeiLi - Mì Bò Đài Loan & Mì Sủi Cảo - Mai Văn Vĩnh",
+      "combined_address": "2B Mai Văn Vĩnh, Phường Tân Quy, Quận 7",
+      "combined_city": "Ho Chi Minh",
+      "street": "2B Mai Văn Vĩnh, Phường Tân Quy",
+      "suburb": "Quận 7",
+      "city": "Ho Chi Minh",
+      "cityId": 9,
+      "country": "Vietnam",
+      "countryID": 5,
+      "countryCode": "VN"
+    },
+    "menu": {
+      "categories": [
+        {
+          "ID": "VNCAT20250701082211014454",
+          "name": "MÌ BÒ ĐÀI LOAN",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082211024673",
+              "name": "Mì Bò Đài Loan/ 台湾⽜⾁⾯",
+              "priceInMinorUnit": 75000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211024673/photo/bfc399c2_186ABEEC1CAD.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, Sốt Hầm Bò, Cải Thìa, Hành, Nước Lèo",
+              "sortOrder": 402,
+              "discountedPriceInMin": 75000,
+              "priceV2": {
+                "amountInMinor": 75000,
+                "amountDisplay": "75.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 75000,
+                "amountDisplay": "75.000"
+              },
+              "metadata": "{\"external_data\":\"SP00187\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 75000,
+              "discountedTakeawayPriceInMin": 75000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211024673/photo/bfc399c2_186ABEEC1CAD.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211024673/detail/bfc399c2_186ABEEC1CAD.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082211024673/photos/bfc399c2_186ABEEC1CAD.jpg"
+            },
+            {
+              "ID": "VNITE20250701082212019955",
+              "name": "Mì sườn bò Đài Loan rút xương/ ⼤⽅⽜肋麵",
+              "priceInMinorUnit": 85000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082212019955/photo/e324e71d_186AD41C1382.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, Sốt Hầm Bò, Cải Thìa,  Hành, Nước Lèo",
+              "sortOrder": 401,
+              "discountedPriceInMin": 85000,
+              "priceV2": {
+                "amountInMinor": 85000,
+                "amountDisplay": "85.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 85000,
+                "amountDisplay": "85.000"
+              },
+              "metadata": "{\"external_data\":\"SP00237\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 85000,
+              "discountedTakeawayPriceInMin": 85000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082212019955/photo/e324e71d_186AD41C1382.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082212019955/detail/e324e71d_186AD41C1382.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082212019955/photos/e324e71d_186AD41C1382.jpg"
+            }
+          ],
+          "sortOrder": 7,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "Taiwanese Beef Noodle Soup",
+                "ko": "대만식 소고기 국수",
+                "zh": "台湾牛肉面汤"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358131,
+            "nanos": 330769000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082151019985",
+          "name": "MÌ & SỦI CẢO",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082152012849",
+              "name": "Mì sủi cảo nước/ 水饺面",
+              "priceInMinorUnit": 49000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082152012849/photo/bb6de733_186A28E9EC28.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, 3 Viên Sủi Cảo Lớn, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili",
+              "sortOrder": 3209,
+              "discountedPriceInMin": 49000,
+              "priceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "metadata": "{\"external_data\":\"SP00001\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 49000,
+              "discountedTakeawayPriceInMin": 49000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082152012849/photo/bb6de733_186A28E9EC28.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082152012849/detail/bb6de733_186A28E9EC28.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082152012849/photos/bb6de733_186A28E9EC28.jpg"
+            },
+            {
+              "ID": "VNITE20250701082153012818",
+              "name": "Mì gà quay tiêu khô/ 胡椒烤鸡面",
+              "priceInMinorUnit": 65000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153012818/photo/300266d7_186A4A999815.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, Gà Quay Tiêu, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili, Nước Lèo Riêng",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018083933",
+                  "name": "khô / nước",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010019099351",
+                      "name": "Khô",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-NT96\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Dry",
+                            "ko": "건조",
+                            "zh": "干"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250701082222011712",
+                      "name": "Nước",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-EM3K\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Water",
+                            "ko": "물",
+                            "zh": "水"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Dry / Wet",
+                        "ko": "건조 / 국물",
+                        "zh": "干/汤"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 3208,
+              "discountedPriceInMin": 65000,
+              "priceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "metadata": "{\"external_data\":\"SP00002\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 65000,
+              "discountedTakeawayPriceInMin": 65000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153012818/photo/300266d7_186A4A999815.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153012818/detail/300266d7_186A4A999815.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082153012818/photos/300266d7_186A4A999815.jpg"
+            },
+            {
+              "ID": "VNITE20250701082153022794",
+              "name": "Mì thập cẩm nước/ 十全面",
+              "priceInMinorUnit": 79000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153022794/photo/a2e493d3_186A580D6D50.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, 2 Viên Sủi Cảo Lớn, Xá Xíu, Gà Quay Tiêu, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018083933",
+                  "name": "khô / nước",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010019099351",
+                      "name": "Khô",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-NT96\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Dry",
+                            "ko": "건조",
+                            "zh": "干"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250701082222011712",
+                      "name": "Nước",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-EM3K\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Water",
+                            "ko": "물",
+                            "zh": "水"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Dry / Wet",
+                        "ko": "건조 / 국물",
+                        "zh": "干/汤"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 2807,
+              "discountedPriceInMin": 79000,
+              "priceV2": {
+                "amountInMinor": 79000,
+                "amountDisplay": "79.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 79000,
+                "amountDisplay": "79.000"
+              },
+              "metadata": "{\"external_data\":\"SP00004\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 79000,
+              "discountedTakeawayPriceInMin": 79000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153022794/photo/a2e493d3_186A580D6D50.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082153022794/detail/a2e493d3_186A580D6D50.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082153022794/photos/a2e493d3_186A580D6D50.jpg"
+            },
+            {
+              "ID": "VNITE20250701082154017986",
+              "name": "Mì xá xíu HongKong khô/  港式叉烧面",
+              "priceInMinorUnit": 65000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154017986/photo/dd58bc9f_186A6845E33E.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, Xá Xíu, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili, Nước Lèo Riêng",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018083933",
+                  "name": "khô / nước",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010019099351",
+                      "name": "Khô",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-NT96\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Dry",
+                            "ko": "건조",
+                            "zh": "干"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250701082222011712",
+                      "name": "Nước",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-EM3K\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Water",
+                            "ko": "물",
+                            "zh": "水"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Dry / Wet",
+                        "ko": "건조 / 국물",
+                        "zh": "干/汤"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 2406,
+              "discountedPriceInMin": 65000,
+              "priceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "metadata": "{\"external_data\":\"SP00005\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 65000,
+              "discountedTakeawayPriceInMin": 65000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154017986/photo/dd58bc9f_186A6845E33E.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154017986/detail/dd58bc9f_186A6845E33E.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082154017986/photos/dd58bc9f_186A6845E33E.jpg"
+            },
+            {
+              "ID": "VNITE20250701082154027831",
+              "name": "Mì xá xíu sủi cảo nước / 叉烧水饺面",
+              "priceInMinorUnit": 68000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154027831/photo/aed25a37_186A78DCB839.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, 2 Viên Sủi Cảo Lớn, Xá Xíu, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili",
+              "sortOrder": 2005,
+              "discountedPriceInMin": 68000,
+              "priceV2": {
+                "amountInMinor": 68000,
+                "amountDisplay": "68.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 68000,
+                "amountDisplay": "68.000"
+              },
+              "metadata": "{\"external_data\":\"SP00006-1\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 68000,
+              "discountedTakeawayPriceInMin": 68000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154027831/photo/aed25a37_186A78DCB839.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082154027831/detail/aed25a37_186A78DCB839.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082154027831/photos/aed25a37_186A78DCB839.jpg"
+            },
+            {
+              "ID": "VNITE20250701082155011540",
+              "name": "Mì xá xíu sủi cảo khô/ 叉烧水饺面",
+              "priceInMinorUnit": 68000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155011540/photo/a40c11a3_186A8CDEDE92.webp",
+              "description": "Mì Tàu Tươi Cao Cấp, 2 Viên Sủi Cảo Lớn, Xá Xíu, Cải Thìa, Hẹ, Hành Phi, Sốt Đặc Biệt Meili",
+              "sortOrder": 1604,
+              "discountedPriceInMin": 68000,
+              "priceV2": {
+                "amountInMinor": 68000,
+                "amountDisplay": "68.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 68000,
+                "amountDisplay": "68.000"
+              },
+              "metadata": "{\"external_data\":\"SP00006-2\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 68000,
+              "discountedTakeawayPriceInMin": 68000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155011540/photo/a40c11a3_186A8CDEDE92.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155011540/detail/a40c11a3_186A8CDEDE92.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082155011540/photos/a40c11a3_186A8CDEDE92.jpg"
+            },
+            {
+              "ID": "VNITE20250701082155027814",
+              "name": "Mì đùi gà GÁC TÔ khô/ 鸡腿搁碗特别",
+              "priceInMinorUnit": 119000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155027814/photo/8fea5bfc_186A9779B2EC.webp",
+              "description": "Đùi Gà Góc Tư Khổng Lồ, Mì Tàu Tươi Cao Cấp, Sốt Cay Fusion, Cải Thìa, Hẹ, Hành Phi, Nước Lèo",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018083933",
+                  "name": "khô / nước",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010019099351",
+                      "name": "Khô",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-NT96\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Dry",
+                            "ko": "건조",
+                            "zh": "干"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250701082222011712",
+                      "name": "Nước",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-EM3K\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Water",
+                            "ko": "물",
+                            "zh": "水"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Dry / Wet",
+                        "ko": "건조 / 국물",
+                        "zh": "干/汤"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 1203,
+              "discountedPriceInMin": 119000,
+              "priceV2": {
+                "amountInMinor": 119000,
+                "amountDisplay": "119.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 119000,
+                "amountDisplay": "119.000"
+              },
+              "metadata": "{\"external_data\":\"SP00179\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-max-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\",\"tagIDFields\":{\"teenCompliance\":{\"value\":\"TEEN_COMPLIANCE_STATUS_TRUE\"}}},\"keep_unavailable_until\":\"2026-02-23T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 119000,
+              "discountedTakeawayPriceInMin": 119000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155027814/photo/8fea5bfc_186A9779B2EC.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082155027814/detail/8fea5bfc_186A9779B2EC.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082155027814/photos/8fea5bfc_186A9779B2EC.jpg"
+            },
+            {
+              "ID": "VNITE20250701082156018968",
+              "name": "Sủi cảo nước 4 viên/ 水饺 4个",
+              "priceInMinorUnit": 49000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156018968/photo/4f84d00d_186AA7AC3665.webp",
+              "description": "4 viên sủi cảo, cải thìa, hành phi, mỡ hành, hẹ, nước lèo, sốt chấm",
+              "sortOrder": 802,
+              "discountedPriceInMin": 49000,
+              "priceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "metadata": "{\"external_data\":\"SP00215\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 49000,
+              "discountedTakeawayPriceInMin": 49000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156018968/photo/4f84d00d_186AA7AC3665.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156018968/detail/4f84d00d_186AA7AC3665.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082156018968/photos/4f84d00d_186AA7AC3665.jpg"
+            },
+            {
+              "ID": "VNITE20250701082156024688",
+              "name": "Sủi cảo sốt giấm sa tế 5 viên/ 麻辣醋汁水饺（5个)",
+              "priceInMinorUnit": 58000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156024688/photo/4853f9ad_m_tieu_sa_te.webp",
+              "description": "5 viên sủi cảo tôm thịt, sốt giấm sate, cải thìa",
+              "sortOrder": 401,
+              "discountedPriceInMin": 58000,
+              "priceV2": {
+                "amountInMinor": 58000,
+                "amountDisplay": "58.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 58000,
+                "amountDisplay": "58.000"
+              },
+              "metadata": "{\"external_data\":\"SP00236\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 58000,
+              "discountedTakeawayPriceInMin": 58000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156024688/photo/4853f9ad_m_tieu_sa_te.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156024688/detail/4853f9ad_m_tieu_sa_te.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082156024688/photos/4853f9ad_m_tieu_sa_te.png"
+            }
+          ],
+          "sortOrder": 6,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "Noodles & Dumplings",
+                "ko": "면 & 만두",
+                "zh": "面条 & 水饺"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358111,
+            "nanos": 986156000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082156016856",
+          "name": "PAO LOVE YOU",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082156037711",
+              "name": "Pao gà Phô Mai Béo Ngậy/ 刈包芝士炸鸡",
+              "priceInMinorUnit": 59000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156037711/photo/8bb020c8_18694EBD17F6.webp",
+              "description": "Vỏ Pao mềm, gà rán, sốt phô mai béo ngậy, xà lách lolo, đu đủ ngâm chua",
+              "sortOrder": 402,
+              "discountedPriceInMin": 59000,
+              "priceV2": {
+                "amountInMinor": 59000,
+                "amountDisplay": "59.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 59000,
+                "amountDisplay": "59.000"
+              },
+              "metadata": "{\"external_data\":\"SP00024\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 59000,
+              "discountedTakeawayPriceInMin": 59000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156037711/photo/8bb020c8_18694EBD17F6.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082156037711/detail/8bb020c8_18694EBD17F6.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082156037711/photos/8bb020c8_18694EBD17F6.jpg"
+            },
+            {
+              "ID": "VNITE20250701082157017589",
+              "name": "Pao xá xíu HongKong/ 刈包港式叉烧",
+              "priceInMinorUnit": 54000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157017589/photo/99f125f5_18697295E0FA.webp",
+              "description": "Vỏ Pao mềm, xá xíu Hongkong, xà lách lolo, đu đủ ngâm chua, hành phi, hành lá",
+              "sortOrder": 401,
+              "discountedPriceInMin": 54000,
+              "priceV2": {
+                "amountInMinor": 54000,
+                "amountDisplay": "54.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 54000,
+                "amountDisplay": "54.000"
+              },
+              "metadata": "{\"external_data\":\"SP00025\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\",\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 54000,
+              "discountedTakeawayPriceInMin": 54000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157017589/photo/99f125f5_18697295E0FA.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157017589/detail/99f125f5_18697295E0FA.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082157017589/photos/99f125f5_18697295E0FA.jpg"
+            }
+          ],
+          "sortOrder": 5,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "PAO LOVE YOU",
+                "ko": "파오 러브 유",
+                "zh": "包爱你"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358116,
+            "nanos": 534085000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082157011152",
+          "name": "CƠM CHIÊN HONGKONG",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082157023470",
+              "name": "Cơm Chiên Má Đùi Gà Quay - Sốt tiêu/ 香烤嫩鸡腿炒饭",
+              "priceInMinorUnit": 69000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157023470/photo/aa7de289_18698E52DB2D.webp",
+              "description": "Tưới sốt lên gà sẽ ngon hơn nhé ạ, xia xìa Má đùi gà, cải thìa, cơm chiên, sốt",
+              "sortOrder": 1605,
+              "discountedPriceInMin": 69000,
+              "priceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "metadata": "{\"external_data\":\"SP00222-1\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 69000,
+              "discountedTakeawayPriceInMin": 69000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157023470/photo/aa7de289_18698E52DB2D.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082157023470/detail/aa7de289_18698E52DB2D.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082157023470/photos/aa7de289_18698E52DB2D.jpg"
+            },
+            {
+              "ID": "VNITE20250701082158017946",
+              "name": "Cơm Chiên Má Đùi Gà Quay - Sốt Cay/ 香烤嫩鸡腿炒饭",
+              "priceInMinorUnit": 69000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158017946/photo/edf6aebd_186C3D68C507.webp",
+              "description": "Tưới sốt lên gà sẽ ngon hơn nhé ạ, xia xìa Má đùi gà, cải thìa, cơm chiên, sốt",
+              "sortOrder": 1604,
+              "discountedPriceInMin": 69000,
+              "priceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "metadata": "{\"external_data\":\"SP00222-3\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 69000,
+              "discountedTakeawayPriceInMin": 69000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158017946/photo/edf6aebd_186C3D68C507.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158017946/detail/edf6aebd_186C3D68C507.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082158017946/photos/edf6aebd_186C3D68C507.jpg"
+            },
+            {
+              "ID": "VNITE20250701082158020225",
+              "name": "Ảm nhiên tiêu hồn phản/ 港式叉烧炒饭",
+              "priceInMinorUnit": 69000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158020225/photo/028d8c60_1869AE2BE8E1.webp",
+              "description": "Thần ăn: Cơm xá xíu nói cơm xá xíu đi, còn ảm nhiên cái gì? Tiêu hồn cái gì?",
+              "sortOrder": 1203,
+              "discountedPriceInMin": 69000,
+              "priceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 69000,
+                "amountDisplay": "69.000"
+              },
+              "metadata": "{\"external_data\":\"SP00225\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 69000,
+              "discountedTakeawayPriceInMin": 69000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158020225/photo/028d8c60_1869AE2BE8E1.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082158020225/detail/028d8c60_1869AE2BE8E1.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082158020225/photos/028d8c60_1869AE2BE8E1.jpg"
+            },
+            {
+              "ID": "VNITE20250701082159019735",
+              "name": "Canh rong biển thịt bằm/ 海带汤",
+              "priceInMinorUnit": 17000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159019735/photo/fcdad19c_1869C8B3B29B.webp",
+              "description": "Nước súp hải sản, rong biển, thịt bằm",
+              "sortOrder": 802,
+              "discountedPriceInMin": 17000,
+              "priceV2": {
+                "amountInMinor": 17000,
+                "amountDisplay": "17.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 17000,
+                "amountDisplay": "17.000"
+              },
+              "metadata": "{\"external_data\":\"SP00230\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 17000,
+              "discountedTakeawayPriceInMin": 17000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159019735/photo/fcdad19c_1869C8B3B29B.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159019735/detail/fcdad19c_1869C8B3B29B.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082159019735/photos/fcdad19c_1869C8B3B29B.jpg"
+            },
+            {
+              "ID": "VNITE20250701082159022068",
+              "name": "Cơm chiên gà xá xíu HongKong/ 香火双绝饭",
+              "priceInMinorUnit": 65000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159022068/photo/aea40bae_1869DBAFC99F.webp",
+              "description": "Tưới sốt lên gà sẽ ngon hơn nhé ạ, xia xìa Gà không xương, cải thìa, cơm chiên, sốt",
+              "sortOrder": 401,
+              "discountedPriceInMin": 65000,
+              "priceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 65000,
+                "amountDisplay": "65.000"
+              },
+              "metadata": "{\"external_data\":\"SP00233\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-max-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\",\"tagIDFields\":{\"teenCompliance\":{\"value\":\"TEEN_COMPLIANCE_STATUS_TRUE\"}}},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\",\"m41_metadata\":{\"is_eligible_to_m41\":true,\"relationship_item_id\":\"\",\"m41Source\":\"\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 65000,
+              "discountedTakeawayPriceInMin": 65000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159022068/photo/aea40bae_1869DBAFC99F.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082159022068/detail/aea40bae_1869DBAFC99F.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082159022068/photos/aea40bae_1869DBAFC99F.jpg"
+            }
+          ],
+          "sortOrder": 4,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "Hong Kong-Style Fried Rice",
+                "ko": "홍콩식 볶음밥",
+                "zh": "港式炒饭"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358117,
+            "nanos": 518613000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082159015310",
+          "name": "MÓN ĂN KÈM",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082200016627",
+              "name": "Sủi cảo chiên/ 炸脆水饺",
+              "priceInMinorUnit": 49000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082200016627/photo/c3c15d52_186B291CC186.webp",
+              "description": "4 Viên Sủi Cảo Tôm Thịt Size Lớn và Sốt Xí Muội",
+              "sortOrder": 1605,
+              "discountedPriceInMin": 49000,
+              "priceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 49000,
+                "amountDisplay": "49.000"
+              },
+              "metadata": "{\"external_data\":\"SP00003\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-24T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 49000,
+              "discountedTakeawayPriceInMin": 49000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082200016627/photo/c3c15d52_186B291CC186.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082200016627/detail/c3c15d52_186B291CC186.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082200016627/photos/c3c15d52_186B291CC186.jpg"
+            },
+            {
+              "ID": "VNITE20250701082201013334",
+              "name": "Gà giòn sốt Cay 2 miếng/ 香辣炸鸡块 2 块",
+              "priceInMinorUnit": 59000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201013334/photo/e9fc1504_70400240710.webp",
+              "sortOrder": 1604,
+              "discountedPriceInMin": 59000,
+              "priceV2": {
+                "amountInMinor": 59000,
+                "amountDisplay": "59.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 59000,
+                "amountDisplay": "59.000"
+              },
+              "metadata": "{\"external_data\":\"SP00034\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 59000,
+              "discountedTakeawayPriceInMin": 59000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201013334/photo/e9fc1504_70400240710.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201013334/detail/e9fc1504_70400240710.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082201013334/photos/e9fc1504_70400240710.jpg"
+            },
+            {
+              "ID": "VNITE20250701082201021959",
+              "name": "Gà giòn sốt Phô Mai tan chảy 2 miếng/ 芝士炸鸡块 2 块",
+              "priceInMinorUnit": 53000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201021959/photo/9303fdc8_70400253511.webp",
+              "description": "2 Miếng má đùi gà chiên giòn sốt Phô Mai tan chảy",
+              "sortOrder": 1203,
+              "discountedPriceInMin": 53000,
+              "priceV2": {
+                "amountInMinor": 53000,
+                "amountDisplay": "53.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 53000,
+                "amountDisplay": "53.000"
+              },
+              "metadata": "{\"external_data\":\"SP00035\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 53000,
+              "discountedTakeawayPriceInMin": 53000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201021959/photo/9303fdc8_70400253511.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082201021959/detail/9303fdc8_70400253511.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082201021959/photos/9303fdc8_70400253511.jpg"
+            },
+            {
+              "ID": "VNITE20250701082202015898",
+              "name": "Gà giòn sốt Cay 1 miếng/ 香辣炸鸡块 1 块",
+              "priceInMinorUnit": 30000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202015898/photo/7e6ef02d_70400639013.webp",
+              "description": "1 Miếng má đùi gà sốt cay mê say",
+              "sortOrder": 802,
+              "discountedPriceInMin": 30000,
+              "priceV2": {
+                "amountInMinor": 30000,
+                "amountDisplay": "30.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 30000,
+                "amountDisplay": "30.000"
+              },
+              "metadata": "{\"external_data\":\"SP00036\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 30000,
+              "discountedTakeawayPriceInMin": 30000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202015898/photo/7e6ef02d_70400639013.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202015898/detail/7e6ef02d_70400639013.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082202015898/photos/7e6ef02d_70400639013.jpg"
+            },
+            {
+              "ID": "VNITE20250701082202029309",
+              "name": "Gà giòn sốt Phô Mai tan chảy 1 miếng/ 芝士炸鸡块 1 块",
+              "priceInMinorUnit": 28000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202029309/photo/71d38742_70400649014.webp",
+              "description": "1 Miếng má đùi gà giòn sốt phô mai tan chảy",
+              "sortOrder": 401,
+              "discountedPriceInMin": 28000,
+              "priceV2": {
+                "amountInMinor": 28000,
+                "amountDisplay": "28.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 28000,
+                "amountDisplay": "28.000"
+              },
+              "metadata": "{\"external_data\":\"SP00037\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-02-11T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 28000,
+              "discountedTakeawayPriceInMin": 28000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202029309/photo/71d38742_70400649014.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082202029309/detail/71d38742_70400649014.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082202029309/photos/71d38742_70400649014.jpg"
+            }
+          ],
+          "sortOrder": 3,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "Side Dishes",
+                "ko": "사이드 메뉴",
+                "zh": "配菜"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358119,
+            "nanos": 859782000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082203010058",
+          "name": "THỨC UỐNG",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082203015170",
+              "name": "Twister",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082203015170/photo/810d91f1_186E96F4227E.webp",
+              "description": "Kèm ly đá mát lạnh",
+              "sortOrder": 4011,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"ITEM-4S7T\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2025-12-29T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082203015170/photo/810d91f1_186E96F4227E.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082203015170/detail/810d91f1_186E96F4227E.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082203015170/photos/810d91f1_186E96F4227E.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082204013197",
+              "name": "Trà Olong",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082204013197/photo/6ea9bff8_186C15B40B66.webp",
+              "description": "Kèm ly đá mát lạnh",
+              "sortOrder": 4010,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"ITEM-BDUJ\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-01-15T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082204013197/photo/6ea9bff8_186C15B40B66.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082204013197/detail/6ea9bff8_186C15B40B66.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082204013197/photos/6ea9bff8_186C15B40B66.png",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082205013187",
+              "name": "Pepsi",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205013187/photo/05e7f8dc_1000_1000_px.webp",
+              "description": "Pepsi kèm ly đá mát lạnh",
+              "sortOrder": 3609,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"SP00007\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-04-26T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205013187/photo/05e7f8dc_1000_1000_px.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205013187/detail/05e7f8dc_1000_1000_px.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082205013187/photos/05e7f8dc_1000_1000_px.png",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082205029047",
+              "name": "7UP",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205029047/photo/28563d22_186BA233142C.webp",
+              "description": "Kèm ly đá mát lạnh",
+              "sortOrder": 3208,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"ITEM-XUTW\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205029047/photo/28563d22_186BA233142C.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082205029047/detail/28563d22_186BA233142C.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082205029047/photos/28563d22_186BA233142C.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082206011710",
+              "name": "Sting",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206011710/photo/631ec0b6_211596sting.webp",
+              "description": "Kèm ly đá mát lạnh",
+              "sortOrder": 2807,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"SP00009\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206011710/photo/631ec0b6_211596sting.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206011710/detail/631ec0b6_211596sting.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082206011710/photos/631ec0b6_211596sting.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082206025755",
+              "name": "Nước suối",
+              "priceInMinorUnit": 15000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206025755/photo/ce5d8ed8_6211580aqua.webp",
+              "description": "Kèm ly đá mát lạnh",
+              "sortOrder": 2406,
+              "discountedPriceInMin": 15000,
+              "priceV2": {
+                "amountInMinor": 15000,
+                "amountDisplay": "15.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 15000,
+                "amountDisplay": "15.000"
+              },
+              "metadata": "{\"external_data\":\"SP00010\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2026-04-25T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 15000,
+              "discountedTakeawayPriceInMin": 15000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206025755/photo/ce5d8ed8_6211580aqua.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082206025755/detail/ce5d8ed8_6211580aqua.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082206025755/photos/ce5d8ed8_6211580aqua.png",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082207011915",
+              "name": "Trà bí đao hạt chia/ 冬瓜奇亚籽茶",
+              "priceInMinorUnit": 18000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207011915/photo/ed928ed7_dao_hat_chia.webp",
+              "description": "Trà Bí Đao Kèm Hạt Chia, Chai Ướp Lạnh 330ml",
+              "sortOrder": 2005,
+              "discountedPriceInMin": 18000,
+              "priceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 18000,
+                "amountDisplay": "18.000"
+              },
+              "metadata": "{\"external_data\":\"SP00022\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 18000,
+              "discountedTakeawayPriceInMin": 18000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207011915/photo/ed928ed7_dao_hat_chia.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207011915/detail/ed928ed7_dao_hat_chia.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082207011915/photos/ed928ed7_dao_hat_chia.png",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082207025833",
+              "name": "Hồng trà Đài Loan vị nguyên bản size M/ 台湾黑奶茶 M",
+              "priceInMinorUnit": 35000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207025833/photo/d2ce0232_403hong_tra.webp",
+              "description": "Hồng trà đài loan vị nguyên bản và trân châu đen",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018095086",
+                  "name": "Đá",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020046191",
+                      "name": "Đá chung",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-XRV7\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Shared Ice",
+                            "ko": "공유 얼음",
+                            "zh": "共用冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250613010019071468",
+                      "name": "Đá riêng",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-OUL1\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Separate Ice",
+                            "ko": "얼음 따로",
+                            "zh": "单独冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Ice",
+                        "ko": "얼음",
+                        "zh": "冰"
+                      }
+                    }
+                  }
+                },
+                {
+                  "ID": "VNMOD20250613010018070759",
+                  "name": "Đường",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 3,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020036049",
+                      "name": "30% Đường",
+                      "available": true,
+                      "sortOrder": 3,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-49DW\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "30% sugar",
+                            "ko": "30% 설탕",
+                            "zh": "30% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019085532",
+                      "name": "50% Đường",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-GBFZ\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "50% Sugar",
+                            "ko": "50% 설탕",
+                            "zh": "50% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019060239",
+                      "name": "70% Đường",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-8JMF\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "70% Sugar",
+                            "ko": "설탕 70%",
+                            "zh": "70% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Sugar",
+                        "ko": "설탕",
+                        "zh": "糖"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 1604,
+              "discountedPriceInMin": 35000,
+              "priceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "metadata": "{\"external_data\":\"SP00188\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"},\"keep_unavailable_until\":\"2025-12-13T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 35000,
+              "discountedTakeawayPriceInMin": 35000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207025833/photo/d2ce0232_403hong_tra.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082207025833/detail/d2ce0232_403hong_tra.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082207025833/photos/d2ce0232_403hong_tra.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082208017700",
+              "name": "Hồng trà Đài Loan vị nguyên bản size L/ 台湾黑奶茶 L",
+              "priceInMinorUnit": 40000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208017700/photo/7bd8f4b4_382hong_tra.webp",
+              "description": "Hồng trà đài loan vị nguyên bản và trân châu đen",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018095086",
+                  "name": "Đá",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020046191",
+                      "name": "Đá chung",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-XRV7\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Shared Ice",
+                            "ko": "공유 얼음",
+                            "zh": "共用冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250613010019071468",
+                      "name": "Đá riêng",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-OUL1\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Separate Ice",
+                            "ko": "얼음 따로",
+                            "zh": "单独冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Ice",
+                        "ko": "얼음",
+                        "zh": "冰"
+                      }
+                    }
+                  }
+                },
+                {
+                  "ID": "VNMOD20250613010018070759",
+                  "name": "Đường",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 3,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020036049",
+                      "name": "30% Đường",
+                      "available": true,
+                      "sortOrder": 3,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-49DW\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "30% sugar",
+                            "ko": "30% 설탕",
+                            "zh": "30% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019085532",
+                      "name": "50% Đường",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-GBFZ\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "50% Sugar",
+                            "ko": "50% 설탕",
+                            "zh": "50% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019060239",
+                      "name": "70% Đường",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-8JMF\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "70% Sugar",
+                            "ko": "설탕 70%",
+                            "zh": "70% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Sugar",
+                        "ko": "설탕",
+                        "zh": "糖"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 1203,
+              "discountedPriceInMin": 40000,
+              "priceV2": {
+                "amountInMinor": 40000,
+                "amountDisplay": "40.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 40000,
+                "amountDisplay": "40.000"
+              },
+              "metadata": "{\"external_data\":\"SP00190\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 40000,
+              "discountedTakeawayPriceInMin": 40000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208017700/photo/7bd8f4b4_382hong_tra.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208017700/detail/7bd8f4b4_382hong_tra.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082208017700/photos/7bd8f4b4_382hong_tra.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082208021909",
+              "name": "Trà Dâu Nữ Nhi Hồng/ 草莓水果茶",
+              "priceInMinorUnit": 35000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208021909/photo/9bc0e155_2286tra_dau.webp",
+              "description": "Đậm trà",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018095086",
+                  "name": "Đá",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020046191",
+                      "name": "Đá chung",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-XRV7\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Shared Ice",
+                            "ko": "공유 얼음",
+                            "zh": "共用冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250613010019071468",
+                      "name": "Đá riêng",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-OUL1\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Separate Ice",
+                            "ko": "얼음 따로",
+                            "zh": "单独冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Ice",
+                        "ko": "얼음",
+                        "zh": "冰"
+                      }
+                    }
+                  }
+                },
+                {
+                  "ID": "VNMOD20250613010018070759",
+                  "name": "Đường",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 3,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020036049",
+                      "name": "30% Đường",
+                      "available": true,
+                      "sortOrder": 3,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-49DW\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "30% sugar",
+                            "ko": "30% 설탕",
+                            "zh": "30% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019085532",
+                      "name": "50% Đường",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-GBFZ\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "50% Sugar",
+                            "ko": "50% 설탕",
+                            "zh": "50% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019060239",
+                      "name": "70% Đường",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-8JMF\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "70% Sugar",
+                            "ko": "설탕 70%",
+                            "zh": "70% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Sugar",
+                        "ko": "설탕",
+                        "zh": "糖"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 802,
+              "discountedPriceInMin": 35000,
+              "priceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "metadata": "{\"external_data\":\"SP00239\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-max-api\",\"hitLabels\":[\"alcohol\",\"alcohol\",\"alcohol\",\"alcohol\"],\"hitPolicies\":[\"Contains prohibited content\",\"Contains prohibited content\",\"Contains prohibited content\",\"Contains prohibited content\"],\"againstFields\":{\"textFields\":[\"Description\",\"Name\"],\"imageFields\":[\"Photos\"]},\"streamStatus\":\"FAILED\",\"isAppeal\":true,\"tagIDFields\":{\"teenCompliance\":{\"value\":\"TEEN_COMPLIANCE_STATUS_FALSE\",\"labels\":[\"teen_alcohol_ar\"]}}},\"keep_unavailable_until\":\"2026-02-13T00:00:00+07:00\"}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "specialItemType": "alcohol",
+              "takeawayPriceInMin": 35000,
+              "discountedTakeawayPriceInMin": 35000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208021909/photo/9bc0e155_2286tra_dau.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082208021909/detail/9bc0e155_2286tra_dau.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082208021909/photos/9bc0e155_2286tra_dau.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082209010745",
+              "name": "Trà Đào/ 水蜜桃果茶",
+              "priceInMinorUnit": 35000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209010745/photo/2077c893_2309tra_dao.webp",
+              "description": "Đậm trà",
+              "modifierGroups": [
+                {
+                  "ID": "VNMOD20250613010018095086",
+                  "name": "Đá",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 2,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020046191",
+                      "name": "Đá chung",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-XRV7\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Shared Ice",
+                            "ko": "공유 얼음",
+                            "zh": "共用冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    },
+                    {
+                      "ID": "VNMOD20250613010019071468",
+                      "name": "Đá riêng",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-OUL1\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "Separate Ice",
+                            "ko": "얼음 따로",
+                            "zh": "单独冰块"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 2
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Ice",
+                        "ko": "얼음",
+                        "zh": "冰"
+                      }
+                    }
+                  }
+                },
+                {
+                  "ID": "VNMOD20250613010018070759",
+                  "name": "Đường",
+                  "available": true,
+                  "selectionType": 1,
+                  "selectionRangeMax": 3,
+                  "modifiers": [
+                    {
+                      "ID": "VNMOD20250613010020036049",
+                      "name": "30% Đường",
+                      "available": true,
+                      "sortOrder": 3,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-49DW\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "30% sugar",
+                            "ko": "30% 설탕",
+                            "zh": "30% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019085532",
+                      "name": "50% Đường",
+                      "available": true,
+                      "sortOrder": 2,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-GBFZ\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "50% Sugar",
+                            "ko": "50% 설탕",
+                            "zh": "50% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    },
+                    {
+                      "ID": "VNMOD20250613010019060239",
+                      "name": "70% Đường",
+                      "available": true,
+                      "sortOrder": 1,
+                      "priceV2": {},
+                      "metadata": "{\"external_data\":\"ITEM-8JMF\"}",
+                      "CustomisedData": {
+                        "Name": {
+                          "Value": {
+                            "en": "70% Sugar",
+                            "ko": "설탕 70%",
+                            "zh": "70% 糖"
+                          }
+                        }
+                      },
+                      "maxModifierSelectionQuantity": 3
+                    }
+                  ],
+                  "CustomisedData": {
+                    "Name": {
+                      "Value": {
+                        "en": "Sugar",
+                        "ko": "설탕",
+                        "zh": "糖"
+                      }
+                    }
+                  }
+                }
+              ],
+              "sortOrder": 401,
+              "discountedPriceInMin": 35000,
+              "priceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 35000,
+                "amountDisplay": "35.000"
+              },
+              "metadata": "{\"external_data\":\"SP00240\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-max-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\",\"tagIDFields\":{\"teenCompliance\":{\"value\":\"TEEN_COMPLIANCE_STATUS_TRUE\"}}}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 35000,
+              "discountedTakeawayPriceInMin": 35000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209010745/photo/2077c893_2309tra_dao.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209010745/detail/2077c893_2309tra_dao.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082209010745/photos/2077c893_2309tra_dao.png",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            }
+          ],
+          "sortOrder": 2,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "DRINKS",
+                "ko": "음료",
+                "zh": "饮品"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358123,
+            "nanos": 202275000
+          }
+        },
+        {
+          "ID": "VNCAT20250701082209011897",
+          "name": "MÓN THÊM",
+          "available": true,
+          "items": [
+            {
+              "ID": "VNITE20250701082209029027",
+              "name": "Sủi cảo thêm 1 viên/ 水饺 1 个",
+              "priceInMinorUnit": 10000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209029027/photo/cdf5b167_17034883012.webp",
+              "description": "1 viên sủi cảo",
+              "sortOrder": 1204,
+              "discountedPriceInMin": 10000,
+              "priceV2": {
+                "amountInMinor": 10000,
+                "amountDisplay": "10.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 10000,
+                "amountDisplay": "10.000"
+              },
+              "metadata": "{\"external_data\":\"SP00011\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 10000,
+              "discountedTakeawayPriceInMin": 10000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209029027/photo/cdf5b167_17034883012.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082209029027/detail/cdf5b167_17034883012.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082209029027/photos/cdf5b167_17034883012.jpg"
+            },
+            {
+              "ID": "VNITE20250701082210018586",
+              "name": "Mì thêm 1 vắt/ 挤面 1份",
+              "priceInMinorUnit": 10000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210018586/photo/37ab1609_17034895736.webp",
+              "description": "1 Vắt Mì Tàu Tươi Cao Cấp",
+              "sortOrder": 1203,
+              "discountedPriceInMin": 10000,
+              "priceV2": {
+                "amountInMinor": 10000,
+                "amountDisplay": "10.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 10000,
+                "amountDisplay": "10.000"
+              },
+              "metadata": "{\"external_data\":\"SP00012\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {},
+                "attributes": {
+                  "Dietary preferences": {
+                    "attributes": [
+                      {
+                        "id": "ATT-C4JCRNNDPGCCJN4805",
+                        "name": "Vegetarian"
+                      }
+                    ],
+                    "groupID": "ACL-C4JCRNDKVB5CVX7516"
+                  }
+                }
+              },
+              "takeawayPriceInMin": 10000,
+              "discountedTakeawayPriceInMin": 10000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210018586/photo/37ab1609_17034895736.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210018586/detail/37ab1609_17034895736.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082210018586/photos/37ab1609_17034895736.jpg",
+              "dietary": [
+                "dietaryPreferences_vegetarian"
+              ]
+            },
+            {
+              "ID": "VNITE20250701082210029200",
+              "name": "Xá xíu HongKong/ 港式叉烧",
+              "priceInMinorUnit": 30000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210029200/photo/4a46cde5_17034882513.webp",
+              "description": "1 Phần Xá Xíu",
+              "sortOrder": 802,
+              "discountedPriceInMin": 30000,
+              "priceV2": {
+                "amountInMinor": 30000,
+                "amountDisplay": "30.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 30000,
+                "amountDisplay": "30.000"
+              },
+              "metadata": "{\"external_data\":\"SP00013\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 30000,
+              "discountedTakeawayPriceInMin": 30000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210029200/photo/4a46cde5_17034882513.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082210029200/detail/4a46cde5_17034882513.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082210029200/photos/4a46cde5_17034882513.jpg"
+            },
+            {
+              "ID": "VNITE20250701082211011669",
+              "name": "Gà quay tiêu/ 胡椒烤鸡",
+              "priceInMinorUnit": 45000,
+              "imgHref": "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211011669/photo/260b85d5_17034882744.webp",
+              "description": "1 Phần Má Đùi Gà  60gram",
+              "sortOrder": 401,
+              "discountedPriceInMin": 45000,
+              "priceV2": {
+                "amountInMinor": 45000,
+                "amountDisplay": "45.000"
+              },
+              "discountedPriceV2": {
+                "amountInMinor": 45000,
+                "amountDisplay": "45.000"
+              },
+              "metadata": "{\"external_data\":\"SP00014\",\"moderation\":{\"status\":\"PASS\",\"mode\":\"AUTO\",\"client\":\"food-cms-api\",\"againstFields\":{},\"streamStatus\":\"PASSED\"}}",
+              "itemAttributes": {
+                "displayedTexts": {}
+              },
+              "takeawayPriceInMin": 45000,
+              "discountedTakeawayPriceInMin": 45000,
+              "merchantID": "5-C7EZGXTWGVNVV2",
+              "thumbImages": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211011669/photo/260b85d5_17034882744.webp"
+              ],
+              "images": [
+                "https://food-cms.grab.com/compressed_webp/items/VNITE20250701082211011669/detail/260b85d5_17034882744.webp"
+              ],
+              "imgHrefFallback": "https://food-cms.grab.com/item/VNITE20250701082211011669/photos/260b85d5_17034882744.jpg"
+            }
+          ],
+          "sortOrder": 1,
+          "CustomisedData": {
+            "Name": {
+              "Value": {
+                "en": "EXTRA DISH",
+                "ko": "추가 메뉴",
+                "zh": "附加菜"
+              }
+            }
+          },
+          "createdAt": {
+            "seconds": 1751358129,
+            "nanos": 504011000
+          }
+        }
+      ],
+      "menuMeta": {
+        "orderValueLimit": 3000000,
+        "noLocationOrderValueLimit": 1
+      },
+      "dietaryOptions": [
+        {
+          "id": "dietaryPreferences_vegetarian",
+          "name": "Chay",
+          "icon": "VegetarianOutlined",
+          "description": "Có thể chứa sữa, trứng hoặc hành tỏi",
+          "showDisclaimer": true
+        }
+      ]
+    },
+    "currency": {
+      "code": "VND",
+      "symbol": "₫"
+    },
+    "rating": 4.4,
+    "voteCount": 286,
+    "deliverBy": "GRAB",
+    "radius": 10000,
+    "sectionOpenHours": {
+      "open": true,
+      "displayedHours": "12:00 AM - 11:59 PM",
+      "sun": "00:00-23:59",
+      "mon": "00:00-23:59",
+      "tue": "00:00-23:59",
+      "wed": "00:00-23:59",
+      "thu": "00:00-23:59",
+      "fri": "00:00-23:59",
+      "sat": "00:00-23:59"
+    },
+    "status": "ACTIVE",
+    "sofConfiguration": {
+      "thresholdInMin": 50000,
+      "thresholdForDisplay": {
+        "amountInMinor": 50000,
+        "amountDisplay": "50.000₫"
+      },
+      "calculationMode": "FixedFee",
+      "fixFeeInMin": 3000,
+      "fixFeeForDisplay": {
+        "amountInMinor": 3000,
+        "amountDisplay": "3.000₫"
+      }
+    },
+    "businessType": "FOOD",
+    "announcement": [
+      {
+        "desc": "Chỉ hiển thị các món chay",
+        "priority": 3,
+        "announcementType": 9
+      }
+    ],
+    "ratingDetail": [
+      {
+        "score": 1,
+        "voteCountPercentage": 9
+      },
+      {
+        "score": 2,
+        "voteCountPercentage": 3
+      },
+      {
+        "score": 3,
+        "voteCountPercentage": 5
+      },
+      {
+        "score": 4,
+        "voteCountPercentage": 4
+      },
+      {
+        "score": 5,
+        "voteCountPercentage": 77
+      }
+    ],
+    "serviceBasedMenuEnabled": true,
+    "merchantGroupID": "VNMG20250611094538011933",
+    "photoHrefFallback": "https://huawei-food-cms.grab.com/Merchants/5-C7EZGXTWGVNVV2/photos/4134ab83a0314e13a8da1c759606f1af_1749635324712686363.jpg",
+    "menuLanguageList": [
+      {
+        "languageCode": "vi",
+        "content": "Tiếng Việt",
+        "isAppliedOnMenu": true
+      },
+      {
+        "languageCode": "en",
+        "content": "English",
+        "subtitle": "Translation may be machine-generated"
+      },
+      {
+        "languageCode": "ko",
+        "content": "한국어",
+        "subtitle": "번역이 자동으로 생성될 수 있습니다"
+      },
+      {
+        "languageCode": "zh",
+        "content": "中文",
+        "subtitle": "翻译可能是机器生成的"
+      }
+    ],
+    "menuTranslationInfo": {
+      "menuLanguageSheet": {
+        "title": "Chọn ngôn ngữ thực đơn",
+        "menuLanguageList": [
+          {
+            "languageCode": "vi",
+            "content": "Tiếng Việt",
+            "isAppliedOnMenu": true
+          },
+          {
+            "languageCode": "en",
+            "content": "English",
+            "subtitle": "Translation may be machine-generated"
+          },
+          {
+            "languageCode": "ko",
+            "content": "한국어",
+            "subtitle": "번역이 자동으로 생성될 수 있습니다"
+          },
+          {
+            "languageCode": "zh",
+            "content": "中文",
+            "subtitle": "翻译可能是机器生成的"
+          }
+        ]
+      }
+    },
+    "merchantShareLink": {
+      "shareText": "Thử xem qua MeiLi - Mì Bò Đài Loan & Mì Sủi Cảo - Mai Văn Vĩnh trên GrabFood nhé!",
+      "shareLink": "https://r.grab.com/g/6-{sourceID}-5-C7EZGXTWGVNVV2"
+    },
+    "smallPhotoHref": "https://huawei-food-cms.grab.com/compressed_webp/merchants/5-C7EZGXTWGVNVV2/list/6cfe8cf146714171a02854775c5b7e22_1773595223094740425.webp",
+    "roofTopBanner": {
+      "title": "Đã đóng",
+      "message": "Mở cửa vào 21 Thg 5, 09:00",
+      "type": "CLOSED",
+      "scheduledTime": "2026-05-21T02:00:00Z"
+    },
+    "offerCarousel": {
+      "offerHighlights": [
+        {
+          "highlight": {
+            "type": "promoTag",
+            "title": "Dùng GrabUnlimited",
+            "subtitle": "Giảm đến 12.000₫",
+            "icon": "https://assets-mobile.grab.com/deliveries/food/food_delivery_fee_grab_vip_icon@3x.png",
+            "custom": {
+              "promoTag": {
+                "source": "guNonSubscriberTag"
+              }
+            },
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#DBDBDB"
+          },
+          "type": 4,
+          "meta": "{\"deeplink\":\"grab://open?screenType=SUBSCRIPTION_PLAN_DETAIL&sourceID=MEX_STORE&sourceCampaignName=Grabunlimited&subscriptionStatus=0&churnStatus=0\"}"
+        },
+        {
+          "highlight": {
+            "type": "promoTag",
+            "title": "Giảm 14.000₫",
+            "subtitle": "Đơn hàng từ 40.000₫",
+            "icon": "https://d1e7x4vhxitr4g.cloudfront.net/media/f9/f9a46963-e710-41d4-9d0c-94ded35a6bbd.png",
+            "custom": {
+              "promoTag": {
+                "id": "39364536",
+                "source": "omegaPromoTag"
+              }
+            },
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#DBDBDB"
+          },
+          "type": 2,
+          "meta": "{\"offerID\":\"39364536\",\"discountToken\":\"2:39364536\",\"decisionID\":\"2:39364536_66ac7e55-a7b1-4b87-b7e8-f517db9e6b47\"}"
+        },
+        {
+          "highlight": {
+            "type": "promoTag",
+            "title": "Giảm 21.000₫",
+            "subtitle": "Đơn hàng từ 80.000₫",
+            "icon": "https://d1e7x4vhxitr4g.cloudfront.net/media/f9/f9a46963-e710-41d4-9d0c-94ded35a6bbd.png",
+            "custom": {
+              "promoTag": {
+                "id": "39364612",
+                "source": "omegaPromoTag"
+              }
+            },
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#DBDBDB"
+          },
+          "type": 2,
+          "meta": "{\"offerID\":\"39364612\",\"discountToken\":\"2:39364612\",\"decisionID\":\"2:39364612_66ac7e55-a7b1-4b87-b7e8-f517db9e6b47\"}"
+        },
+        {
+          "highlight": {
+            "type": "promoTag",
+            "title": "Giảm 26.000₫",
+            "subtitle": "Đơn hàng từ 100.000₫",
+            "icon": "https://d1e7x4vhxitr4g.cloudfront.net/media/f9/f9a46963-e710-41d4-9d0c-94ded35a6bbd.png",
+            "custom": {
+              "promoTag": {
+                "id": "39364765",
+                "source": "omegaPromoTag"
+              }
+            },
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#DBDBDB"
+          },
+          "type": 2,
+          "meta": "{\"offerID\":\"39364765\",\"discountToken\":\"2:39364765\",\"decisionID\":\"2:39364765_66ac7e55-a7b1-4b87-b7e8-f517db9e6b47\"}"
+        },
+        {
+          "highlight": {
+            "type": "promoTag",
+            "title": "Giảm 33.000₫",
+            "subtitle": "Đơn hàng từ 150.000₫",
+            "icon": "https://d1e7x4vhxitr4g.cloudfront.net/media/f9/f9a46963-e710-41d4-9d0c-94ded35a6bbd.png",
+            "custom": {
+              "promoTag": {
+                "id": "39364904",
+                "source": "omegaPromoTag"
+              }
+            },
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#DBDBDB"
+          },
+          "type": 2,
+          "meta": "{\"offerID\":\"39364904\",\"discountToken\":\"2:39364904\",\"decisionID\":\"2:39364904_66ac7e55-a7b1-4b87-b7e8-f517db9e6b47\"}"
+        }
+      ]
+    }
+  },
+  "promotions": null,
+  "enableServiceBasedMenu": true,
+  "enableSTO": true,
+  "enableSTOReboot": false,
+  "featureFlags": null,
+  "enableFlexibleQuantityModifier": false
+}

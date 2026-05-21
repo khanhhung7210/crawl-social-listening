@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from social_listening.keyword_config import load_keyword_payload
+from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import normalize_text
@@ -29,15 +29,11 @@ def main() -> int:
 
     keyword_payload = load_keyword_payload()
     film_title = str(keyword_payload.get("film_title") or "").strip()
-    exact_keywords = [
-        str(value or "").strip()
-        for value in (keyword_payload.get("keywords") or [])
-        if str(value or "").strip()
-    ]
-    if not film_title and not exact_keywords:
+    accepted_terms = collect_search_terms(keyword_payload)
+    if not film_title and not accepted_terms:
         raise RuntimeError("Missing film_title/keywords in shared keyword config")
 
-    normalized_variants = {normalize_text(value) for value in exact_keywords}
+    normalized_variants = {normalize_text(value) for value in accepted_terms}
     if film_title:
         normalized_variants.add(normalize_text(film_title))
 

@@ -9,11 +9,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from social_listening.paths import DATA_DIR, ensure_dir
+from social_listening.film_paths import platform_processed_dir, platform_raw_dir
+from social_listening.instagram_comment_parser import extract_instagram_comments_from_body_text
+from social_listening.paths import ensure_dir
 
 
-INPUT_FILE = DATA_DIR / "instagram" / "raw" / "instagram_all_posts.json"
-OUTPUT_FILE = DATA_DIR / "instagram" / "processed" / "instagram_grouped_parsed.json"
+INPUT_FILE = platform_raw_dir("instagram") / "instagram_all_posts.json"
+OUTPUT_FILE = platform_processed_dir("instagram") / "instagram_grouped_parsed.json"
 SOURCE_NAME = "instagram_format_job"
 
 
@@ -142,7 +144,9 @@ def search_meta_content(html: str, property_name: str) -> str:
 def extract_crawled_comments(item: dict, post_id: str, post_url: str) -> list[dict]:
     raw_comments = item.get("crawled_comments") or []
     if not isinstance(raw_comments, list):
-        return []
+        raw_comments = []
+    if not raw_comments:
+        raw_comments = extract_instagram_comments_from_body_text(str(item.get("body_text") or ""), post_url)
 
     crawled_at = normalize_created_at(item.get("crawled_at"))
     comments: list[dict] = []

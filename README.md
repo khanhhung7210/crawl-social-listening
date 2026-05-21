@@ -48,6 +48,44 @@ pip install -r requirements.txt
 - `data/archive/`: file mẫu hoặc output cũ được giữ lại để tham chiếu.
 - `reports/`: file Excel báo cáo.
 
+## Shared Keyword Config
+
+Tất cả source đang đọc chung file:
+
+- `data/shared/social_keywords.json`
+
+Format cũ vẫn chạy nguyên như trước:
+
+```json
+{
+  "film_title": "Hẹn Em Ngày Nhật Thực",
+  "keywords": ["Hẹn Em Ngày Nhật Thực"],
+  "sub_keywords": [],
+  "hashtags": []
+}
+```
+
+Nếu cần lưu nhiều key nhưng chỉ cho một process cụ thể chạy, có thể dùng object:
+
+```json
+{
+  "active_process": "local",
+  "film_title": "Hẹn Em Ngày Nhật Thực",
+  "keywords": [
+    "Hẹn Em Ngày Nhật Thực",
+    {"value": "hen em review", "processes": ["local"]},
+    {"value": "hen em server only", "processes": ["server"]}
+  ]
+}
+```
+
+Rule áp dụng cho tất cả source:
+
+- string thường sẽ luôn chạy như trước
+- object có `processes` chỉ chạy khi khớp `active_process`
+- key nằm ngoài process hiện tại chỉ được lưu trong file, không tham gia crawl/filter
+- có thể override bằng env `SOCIAL_LISTENING_PROCESS` hoặc `KEYWORD_PROCESS`
+
 ## Chạy Threads
 
 Mở Chrome với remote debugging và dùng profile đã login Threads:
@@ -140,7 +178,7 @@ Output mặc định:
 
 Lưu ý:
 
-- `facebook_raw_runner.py` hiện crawl web từ page Facebook public bằng browser session, không còn dùng Graph API.
+- `facebook_raw_runner.py` hiện lấy `search_terms` từ `data/shared/social_keywords.json`, mở Facebook search tổng quát theo từng keyword rồi lọc các URL post tìm được để crawl bằng browser session.
 - Nên dùng Chrome profile đã login để tránh popup và hạn chế nội dung.
 
 ## Chạy YouTube
@@ -257,6 +295,69 @@ python3 scripts/dashboard/dashboard_server.py
 Mặc định web sẽ lên ở:
 
 - `http://127.0.0.1:8787`
+
+## Chạy Tự Động Trên Windows Server
+
+Có thể chạy tự động hằng ngày cho cả 5 platform cùng lúc nếu mỗi platform đã có Chrome riêng với debug port riêng:
+
+- Threads: `9222`
+- TikTok: `9223`
+- Instagram: `9224`
+- YouTube: `9225`
+- Facebook: `9226`
+
+Script Windows đã thêm:
+
+- [run_social_listening_daily.ps1](/Users/khangnhq/Desktop/WorkGalaxy/social-listening/scripts/windows/run_social_listening_daily.ps1#L1)
+- [run_platform_pipeline.ps1](/Users/khangnhq/Desktop/WorkGalaxy/social-listening/scripts/windows/run_platform_pipeline.ps1#L1)
+
+`run_social_listening_daily.ps1` sẽ:
+
+- set đúng 5 biến `*_DEBUGGER_ADDRESS`
+- giữ lock file để tránh chạy đè job cũ
+- launch 5 pipeline song song
+- mỗi platform tự chạy tuần tự các bước crawl/filter/format/sync của chính nó
+- ghi log riêng theo từng platform vào `logs/windows-runs/<timestamp>/`
+
+Ví dụ chạy tay trên Windows:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\windows\run_social_listening_daily.ps1 `
+  -RepoRoot C:\social-listening `
+  -PythonPath C:\social-listening\.venv\Scripts\python.exe
+```
+
+Nếu muốn script tự mở luôn 5 Chrome debug profile:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\windows\run_social_listening_daily.ps1 `
+  -RepoRoot C:\social-listening `
+  -PythonPath C:\social-listening\.venv\Scripts\python.exe `
+  -StartChrome
+```
+
+Gợi ý setup Task Scheduler:
+
+1. Tạo task mới trong Windows Task Scheduler
+2. Trigger: Daily, chọn giờ chạy
+3. Action:
+
+```text
+Program/script:
+powershell.exe
+
+Add arguments:
+-ExecutionPolicy Bypass -File "C:\social-listening\scripts\windows\run_social_listening_daily.ps1" -RepoRoot "C:\social-listening" -PythonPath "C:\social-listening\.venv\Scripts\python.exe"
+```
+
+4. Chọn `Run whether user is logged on or not`
+5. Chọn `Start in`: `C:\social-listening`
+
+Lưu ý thực tế trên Windows server:
+
+- Nếu platform cần session login, profile Chrome tương ứng phải còn đăng nhập sẵn.
+- Chạy song song được vì mỗi platform bám một Chrome port riêng, không đạp tab của nhau.
+- Không nên dùng chung một port cho nhiều platform.
 
 Biến môi trường hỗ trợ:
 

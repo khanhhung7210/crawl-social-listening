@@ -9,14 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException
+from selenium.common.exceptions import InvalidSessionIdException, SessionNotCreatedException, TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -25,6 +23,7 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
+from social_listening.crawl_state import IncrementalCrawlState
 
 
 DEBUGGER_ADDRESS = os.getenv("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9223")
@@ -41,6 +40,7 @@ INITIAL_VIDEO_WAIT_SECONDS = float(os.getenv("TIKTOK_INITIAL_VIDEO_WAIT_SECONDS"
 CAPTCHA_WAIT_SECONDS = float(os.getenv("TIKTOK_CAPTCHA_WAIT_SECONDS", "20"))
 COMMENT_PANEL_WAIT_SECONDS = float(os.getenv("TIKTOK_COMMENT_PANEL_WAIT_SECONDS", "2.5"))
 COMMENT_SCROLL_PAUSE_SECONDS = float(os.getenv("TIKTOK_COMMENT_SCROLL_PAUSE_SECONDS", "2.8"))
+DEBUG_COMMENTS = str(os.getenv("TIKTOK_DEBUG_COMMENTS", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main() -> int:
@@ -52,42 +52,82 @@ def main() -> int:
 
     video_urls = [item for item in video_urls if item.get("url")]
     if not video_urls:
-        raise RuntimeError("No TikTok video URLs found.")
+        print("[tiktok-detail] No TikTok video URLs found - nothing to crawl")
+        print(f"[tiktok-detail] This is normal for incremental runs with no new content")
+        return 0
 
     print(f"using tiktok input file: {input_file}")
 
     output_path = OUTPUT_FILE
     records = load_existing_records(output_path)
-    existing_urls = collect_existing_video_urls(records)
-    pending_urls = [item for item in video_urls if item["url"] not in existing_urls]
+    completed_urls = collect_completed_video_urls(records)
+    pending_urls = [item for item in video_urls if item["url"] not in completed_urls]
 
     if not pending_urls:
         print(f"no pending videos; {len(records)} records already saved in {output_path.resolve()}")
         return 0
 
-    driver = build_driver()
-    try:
-        total = len(pending_urls)
-        for index, item in enumerate(pending_urls, start=1):
-            url = item["url"]
-            keyword = item["keyword"]
-            try:
-                record = crawl_video(driver, url, keyword, search_terms)
-            except Exception as exc:
-                record = {
-                    "keyword": keyword,
-                    "url": url,
-                    "matched": False,
-                    "error": str(exc),
-                }
-            records.append(record)
-            save_records(output_path, records)
-            print(f"[{index}/{total}] saved {url}")
+    with IncrementalCrawlState() as state:
+        run_id = state.start_run("tiktok_detail", "incremental")
+        urls_crawled = 0
+        urls_skipped = len(completed_urls)
 
-        print(f"saved {len(records)} total video payloads to {output_path.resolve()}")
-        return 0
-    finally:
-        driver.quit()
+        print(f"[tiktok-detail] URLs to crawl: {len(pending_urls)}")
+        print(f"[tiktok-detail] URLs skipped: {urls_skipped}")
+
+        driver = build_driver()
+        try:
+            total = len(pending_urls)
+            for index, item in enumerate(pending_urls, start=1):
+                url = item["url"]
+                keyword = item["keyword"]
+                try:
+                    record = crawl_video(driver, url, keyword, search_terms)
+                    # Extract timestamp if available
+                    content_timestamp = record.get("created_time") or record.get("crawled_at")
+                    state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
+                    urls_crawled += 1
+                except (InvalidSessionIdException, WebDriverException) as exc:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = build_driver()
+                    try:
+                        record = crawl_video(driver, url, keyword, search_terms)
+                        content_timestamp = record.get("created_time") or record.get("crawled_at")
+                        state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
+                        urls_crawled += 1
+                    except Exception as retry_exc:
+                        record = {
+                            "keyword": keyword,
+                            "url": url,
+                            "matched": False,
+                            "error": str(retry_exc),
+                        }
+                except Exception as exc:
+                    record = {
+                        "keyword": keyword,
+                        "url": url,
+                        "matched": False,
+                        "error": str(exc),
+                    }
+                records = merge_record(records, record)
+                save_records(output_path, records)
+                print(f"[{index}/{total}] saved {url}")
+
+            state.complete_run(
+                run_id,
+                urls_discovered=len(video_urls),
+                urls_crawled=urls_crawled,
+                urls_skipped=urls_skipped,
+                keywords_processed=len(set(item["keyword"] for item in video_urls))
+            )
+
+            print(f"saved {len(records)} total video payloads to {output_path.resolve()}")
+            return 0
+        finally:
+            driver.quit()
 
 
 def resolve_input_file() -> Path:
@@ -137,16 +177,59 @@ def load_existing_records(path: Path) -> list[dict]:
     return [item for item in payload if isinstance(item, dict)]
 
 
-def collect_existing_video_urls(records: list[dict]) -> set[str]:
+def collect_completed_video_urls(records: list[dict]) -> set[str]:
     urls: set[str] = set()
     for item in records:
         if not isinstance(item, dict):
+            continue
+        if should_retry_record(item):
             continue
         for raw_url in (item.get("current_url"), item.get("url")):
             url = normalize_tiktok_video_url(str(raw_url or "").strip())
             if url:
                 urls.add(url)
     return urls
+
+
+def should_retry_record(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return True
+    if item.get("raw_html") and item.get("current_url"):
+        return False
+    return bool(item.get("error"))
+
+
+def merge_record(records: list[dict], new_record: dict) -> list[dict]:
+    normalized_target = ""
+    for raw_url in (new_record.get("current_url"), new_record.get("url")):
+        normalized_target = normalize_tiktok_video_url(str(raw_url or "").strip())
+        if normalized_target:
+            break
+
+    if not normalized_target:
+        return [*records, new_record]
+
+    merged: list[dict] = []
+    replaced = False
+    for item in records:
+        if not isinstance(item, dict):
+            merged.append(item)
+            continue
+        normalized_existing = ""
+        for raw_url in (item.get("current_url"), item.get("url")):
+            normalized_existing = normalize_tiktok_video_url(str(raw_url or "").strip())
+            if normalized_existing:
+                break
+        if normalized_existing == normalized_target:
+            if not replaced:
+                merged.append(new_record)
+                replaced = True
+            continue
+        merged.append(item)
+
+    if not replaced:
+        merged.append(new_record)
+    return merged
 
 
 def save_records(path: Path, records: list[dict]) -> None:
@@ -181,13 +264,19 @@ def dedupe_records(records: list[dict]) -> list[dict]:
 
 def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: list[str]) -> dict:
     driver.get(url)
-    wait_for_tiktok_side_panel(driver, timeout=max(INITIAL_VIDEO_WAIT_SECONDS, 6))
+    try:
+        wait_for_tiktok_side_panel(driver, timeout=max(INITIAL_VIDEO_WAIT_SECONDS, 6))
+    except TimeoutException:
+        print(f"[tiktok] side panel wait timeout, continue anyway: {url}")
     time.sleep(INITIAL_VIDEO_WAIT_SECONDS)
 
     if has_captcha_or_challenge(driver):
         print(f"[tiktok] captcha/challenge detected, waiting on {url}")
         time.sleep(CAPTCHA_WAIT_SECONDS)
-        wait_for_tiktok_side_panel(driver, timeout=max(CAPTCHA_WAIT_SECONDS, 10))
+        try:
+            wait_for_tiktok_side_panel(driver, timeout=max(CAPTCHA_WAIT_SECONDS, 10))
+        except TimeoutException:
+            print(f"[tiktok] side panel still not ready after captcha wait: {url}")
 
     # focus video để TikTok render panel ổn định hơn
     driver.execute_script("""
@@ -315,52 +404,331 @@ def crawl_comments(driver: webdriver.Chrome) -> list[dict]:
 
     return list(comments.values())
 
-from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
 
 def ensure_comments_panel_open(driver: webdriver.Chrome) -> None:
     for i in range(6):
+        if is_comments_tab_active(driver) and has_comment_items_present(driver):
+            debug_comment_panel(driver, f"already-active-with-items-{i}")
+            return
         if is_comments_tab_active(driver):
-            return
+            debug_comment_panel(driver, f"active-without-items-{i}")
 
-        items = driver.find_elements(By.CSS_SELECTOR, ".TUXTabBar-item")
-        target = None
+        if click_comment_bubble(driver):
+            debug_comment_panel(driver, f"clicked-comment-bubble-{i}")
+            time.sleep(COMMENT_PANEL_WAIT_SECONDS)
+            if is_comments_tab_active(driver) and has_comment_items_present(driver):
+                debug_comment_panel(driver, f"comment-bubble-activated-{i}")
+                return
 
-        for el in items:
-            text = (el.text or "").strip().lower()
-            if "comments" in text or "bình luận" in text:
-                target = el
-                break
+        if click_comments_tab_near_recommendations(driver):
+            debug_comment_panel(driver, f"clicked-comments-tab-near-recommendations-{i}")
+            time.sleep(COMMENT_PANEL_WAIT_SECONDS)
+            if is_comments_tab_active(driver) and has_comment_items_present(driver):
+                debug_comment_panel(driver, f"comments-tab-near-recommendations-activated-{i}")
+                return
 
-        if not target:
-            return
+        target = find_comments_tab_element(driver)
+        if target is None:
+            clicked = click_comments_tab_via_script(driver)
+            debug_comment_panel(driver, f"script-click-comments-tab-{i}-clicked={clicked}")
+            time.sleep(COMMENT_PANEL_WAIT_SECONDS / 2)
+            if clicked and is_comments_tab_active(driver) and has_comment_items_present(driver):
+                debug_comment_panel(driver, f"script-click-comments-tab-activated-{i}")
+                return
+            continue
 
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", target)
             time.sleep(COMMENT_PANEL_WAIT_SECONDS / 2)
 
-            # click thật bằng selenium
+            trigger_interaction_click(driver, target)
             ActionChains(driver).move_to_element(target).pause(0.2).click(target).perform()
 
-            # thử click thêm vào title con nếu cần
             try:
                 title = target.find_element(By.CSS_SELECTOR, ".TUXTabBar-itemTitle")
                 ActionChains(driver).move_to_element(title).pause(0.2).click(title).perform()
             except Exception:
                 pass
 
+            click_comments_tab_via_script(driver)
+            debug_comment_panel(driver, f"selenium-click-comments-target-{i}")
+
             try:
-                WebDriverWait(driver, 2).until(lambda d: is_comments_tab_active(d))
+                WebDriverWait(driver, 2).until(lambda d: is_comments_tab_active(d) and has_comment_items_present(d))
+                debug_comment_panel(driver, f"selenium-click-comments-target-activated-{i}")
                 return
             except Exception:
-                active = driver.execute_script("""
-                    const el = document.querySelector('.TUXTabBar-itemTitle--active, .TUXTabBar-item--active');
-                    return el ? (el.innerText || el.textContent || '').trim().toLowerCase() : '';
-                """)
+                continue
 
         except Exception as exc:
             print("selenium click failed:", exc)
+
+
+def click_comment_bubble(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            """
+            function norm(value) {
+              return (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            const directButton = Array.from(document.querySelectorAll('button'))
+              .find((node) => {
+                const aria = norm(node.getAttribute('aria-label'));
+                const rect = node.getBoundingClientRect();
+                return rect.width >= 20 && rect.height >= 20 && aria.includes('read or add comments');
+              });
+            if (directButton) {
+              const rect = directButton.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+                directButton.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+              });
+              return true;
+            }
+
+            const selectors = [
+              '[data-e2e*="comment"]',
+              '[aria-label*="comment" i]',
+              '[aria-label*="bình luận" i]',
+              'button',
+              'div[role="button"]',
+              'span',
+              'div',
+            ];
+
+            const seen = new Set();
+            const nodes = [];
+            for (const selector of selectors) {
+              for (const node of document.querySelectorAll(selector)) {
+                if (seen.has(node)) continue;
+                seen.add(node);
+                nodes.push(node);
+              }
+            }
+
+            for (const node of nodes) {
+              const text = norm(node.innerText || node.textContent || node.getAttribute('aria-label'));
+              const label = norm(node.getAttribute('aria-label'));
+              const testId = norm(node.getAttribute('data-e2e'));
+              const rect = node.getBoundingClientRect();
+              if (rect.width < 20 || rect.height < 20) continue;
+              const looksLikeComment =
+                label.includes('comment') ||
+                label.includes('bình luận') ||
+                testId.includes('comment') ||
+                /comments|bình luận/.test(text);
+              if (!looksLikeComment) continue;
+
+              const candidates = [
+                node,
+                node.closest('button'),
+                node.closest('[role="button"]'),
+                node.parentElement,
+                node.parentElement?.parentElement,
+              ].filter(Boolean);
+
+              for (const candidate of candidates) {
+                const r = candidate.getBoundingClientRect();
+                if (r.width < 20 || r.height < 20) continue;
+                const x = r.left + r.width / 2;
+                const y = r.top + r.height / 2;
+                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+                  candidate.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+                });
+                return true;
+              }
+            }
+            return false;
+            """
+        )
+    )
+
+
+def click_comments_tab_near_recommendations(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            """
+            function norm(value) {
+              return (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            const directButton = Array.from(document.querySelectorAll('button'))
+              .find((node) => {
+                const text = norm(node.innerText || node.textContent);
+                const rect = node.getBoundingClientRect();
+                return text === 'comments' && rect.width >= 40 && rect.height >= 20 && rect.x > window.innerWidth * 0.6;
+              });
+            if (directButton) {
+              const rect = directButton.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+                directButton.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+              });
+              return true;
+            }
+
+            const allNodes = Array.from(document.querySelectorAll('div, span, button, a'));
+            const commentsNode = allNodes.find((node) => norm(node.innerText || node.textContent) === 'comments');
+            const youMayLikeNode = allNodes.find((node) => norm(node.innerText || node.textContent).includes('you may like'));
+            if (!commentsNode || !youMayLikeNode) return false;
+
+            const commentsRect = commentsNode.getBoundingClientRect();
+            const recRect = youMayLikeNode.getBoundingClientRect();
+            if (Math.abs(commentsRect.top - recRect.top) > 80) return false;
+
+            const candidates = [
+              commentsNode,
+              commentsNode.closest('[role="tab"]'),
+              commentsNode.closest('button'),
+              commentsNode.parentElement,
+              commentsNode.parentElement?.parentElement,
+            ].filter(Boolean);
+
+            for (const candidate of candidates) {
+              const rect = candidate.getBoundingClientRect();
+              if (rect.width < 40 || rect.height < 20) continue;
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+                candidate.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+              });
+              return true;
+            }
+            return false;
+            """
+        )
+    )
+
+
+def find_comments_tab_element(driver: webdriver.Chrome):
+    selectors = [
+        'button',
+        ".TUXTabBar-item",
+        ".TUXTabBar-itemTitle",
+        '[role="tab"]',
+        'div',
+        'span',
+    ]
+    for selector in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements:
+            text = (element.text or element.get_attribute("aria-label") or "").strip().lower()
+            try:
+                rect = element.rect or {}
+            except Exception:
+                rect = {}
+            width = float(rect.get("width") or 0)
+            height = float(rect.get("height") or 0)
+            x = float(rect.get("x") or 0)
+            if width < 20 or height < 20:
+                continue
+            if "comments" in text and x < 900:
+                continue
+            if "comments" in text or "comment" in text or "bình luận" in text:
+                return element
+    return None
+
+
+def click_comments_tab_via_script(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            """
+            function norm(value) {
+              return (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            const labels = ['comments', 'comment', 'bình luận'];
+            const nodes = Array.from(
+              document.querySelectorAll('.TUXTabBar-item, .TUXTabBar-itemTitle, [role="tab"], button, div, span')
+            );
+
+            for (const node of nodes) {
+              const text = norm(node.innerText || node.textContent || node.getAttribute('aria-label'));
+              if (!text) continue;
+              if (!labels.some((label) => text.includes(label))) continue;
+              if (/you may like/.test(text)) continue;
+              const rect = node.getBoundingClientRect();
+              if (rect.width < 20 || rect.height < 12) continue;
+              const candidates = [
+                node,
+                node.closest('[role="tab"]'),
+                node.closest('button'),
+                node.parentElement,
+                node.parentElement?.parentElement,
+              ].filter(Boolean);
+              for (const candidate of candidates) {
+                const r = candidate.getBoundingClientRect();
+                if (r.width < 20 || r.height < 12) continue;
+                const x = r.left + r.width / 2;
+                const y = r.top + r.height / 2;
+                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+                  candidate.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+                });
+                return true;
+              }
+            }
+            return false;
+            """
+        )
+    )
+
+
+def trigger_interaction_click(driver: webdriver.Chrome, element) -> None:
+    driver.execute_script(
+        """
+        const el = arguments[0];
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+          el.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        });
+        """,
+        element,
+    )
+
+
+def debug_comment_panel(driver: webdriver.Chrome, label: str) -> None:
+    if not DEBUG_COMMENTS:
+        return
+    try:
+        snapshot = driver.execute_script(
+            """
+            function norm(value) {
+              return (value || '').replace(/\\s+/g, ' ').trim();
+            }
+            const visibleButtons = Array.from(document.querySelectorAll('button'))
+              .map((node) => {
+                const rect = node.getBoundingClientRect();
+                return {
+                  text: norm(node.innerText || node.textContent),
+                  aria: norm(node.getAttribute('aria-label')),
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y),
+                  w: Math.round(rect.width),
+                  h: Math.round(rect.height),
+                };
+              })
+              .filter((item) => item.w > 20 && item.h > 20 && /comments|comment|you may like/i.test(`${item.text} ${item.aria}`))
+              .slice(0, 10);
+            const hasCommentItems =
+              !!document.querySelector('[data-e2e="comment-level-1"]') ||
+              !!document.querySelector('[data-e2e="comment-item"]') ||
+              !!document.querySelector('[class*="CommentItem"]');
+            return {visibleButtons, hasCommentItems};
+            """
+        )
+        print(f"[tiktok-comments-debug] {label}: {json.dumps(snapshot, ensure_ascii=False)}")
+    except Exception as exc:
+        print(f"[tiktok-comments-debug] {label}: error={exc}")
 
 
 def has_captcha_or_challenge(driver: webdriver.Chrome) -> bool:
@@ -386,12 +754,62 @@ def is_comments_tab_active(driver: webdriver.Chrome) -> bool:
             return (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
         }
 
-        const active = document.querySelector('.TUXTabBar-itemTitle--active, .TUXTabBar-item--active');
-        if (!active) return false;
+        const activeCandidates = Array.from(document.querySelectorAll(
+          '.TUXTabBar-itemTitle--active, .TUXTabBar-item--active, [role="tab"][aria-selected="true"], [aria-pressed="true"]'
+        ));
+        for (const active of activeCandidates) {
+          const text = norm(active.innerText || active.textContent || active.getAttribute('aria-label'));
+          if (text.includes('comments') || text.includes('comment') || text.includes('bình luận')) {
+            return true;
+          }
+        }
 
-        const text = norm(active.innerText || active.textContent || active.getAttribute('aria-label'));
-        return text.includes('comments') || text.includes('bình luận');
+        const visibleText = Array.from(document.querySelectorAll('div, span, button'))
+          .map((node) => norm(node.innerText || node.textContent || node.getAttribute('aria-label')))
+          .filter(Boolean);
+        const hasCommentsTab = visibleText.some((text) => text === 'comments' || text === 'bình luận');
+        const hasYouMayLike = visibleText.some((text) => text.includes('you may like'));
+        const hasCommentItem =
+          document.querySelector('[data-e2e="comment-level-1"]') ||
+          document.querySelector('[data-e2e="comment-item"]') ||
+          document.querySelector('[class*="CommentItem"]');
+        const commentsHeaderSelected = Array.from(document.querySelectorAll('button, [role="tab"], div, span, a'))
+          .some((node) => {
+            const text = norm(node.innerText || node.textContent || node.getAttribute('aria-label'));
+            if (text !== 'comments' && text !== 'bình luận') return false;
+            const rect = node.getBoundingClientRect();
+            if (rect.width < 20 || rect.height < 20 || rect.x < window.innerWidth * 0.6) return false;
+            const selected = norm(node.getAttribute('aria-selected'));
+            const pressed = norm(node.getAttribute('aria-pressed'));
+            const current = norm(node.getAttribute('aria-current'));
+            const className = norm(node.className || '');
+            const style = window.getComputedStyle(node);
+            const fontWeight = parseInt(style.fontWeight || '0', 10) || 0;
+            const borderBottomWidth = parseFloat(style.borderBottomWidth || '0') || 0;
+            return selected === 'true' ||
+              pressed === 'true' ||
+              current === 'page' ||
+              className.includes('active') ||
+              fontWeight >= 600 ||
+              borderBottomWidth >= 2;
+          });
+
+        return Boolean(hasCommentItem) || Boolean(activeCandidates.length) || commentsHeaderSelected;
     """))
+
+
+def has_comment_items_present(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            """
+            return Boolean(
+              document.querySelector('[data-e2e="comment-level-1"]') ||
+              document.querySelector('[data-e2e="comment-item"]') ||
+              document.querySelector('[class*="CommentItem"]')
+            );
+            """
+        )
+    )
 
 def find_comment_container(driver: webdriver.Chrome):
     return driver.execute_script(
