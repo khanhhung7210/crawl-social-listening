@@ -7,7 +7,7 @@ let CURRENT_LANGUAGE = "vi";
 let CURRENT_VIEW = "all";
 let CURRENT_SCOPE = "brand";
 let CURRENT_BRANCH = "all";
-let SOURCE_CONFIG = { completed: false, sources: [] };
+let SOURCE_CONFIG = { completed: false, sources: [], competitor_radar: "" };
 
 const SOURCE_PLATFORM_OPTIONS = [
   ["facebook", "Facebook"],
@@ -47,6 +47,8 @@ const UI_COPY = {
     searchPlaceholder: "⌕ Search pain, evidence, owner, CTA...",
     tableFilterPlaceholder: "Filter feed...",
     accountPrefix: "PostgreSQL",
+    sourceSetupLabel: "Source setup",
+    sourceCloseLabel: "Đóng",
     branches: "chi nhánh",
     marketingView: "Marketing View",
     allView: "All View",
@@ -71,6 +73,8 @@ const UI_COPY = {
     searchPlaceholder: "⌕ Search pain, evidence, owner, CTA...",
     tableFilterPlaceholder: "Filter feed...",
     accountPrefix: "PostgreSQL",
+    sourceSetupLabel: "Source setup",
+    sourceCloseLabel: "Close",
     branches: "branches",
     marketingView: "Marketing View",
     allView: "All View",
@@ -337,11 +341,21 @@ function syncSourceConfigBrand() {
   document.getElementById("source-config-brand").textContent = brandName;
 }
 
+function normalizeSourceConfig(config) {
+  const next = config && typeof config === "object" ? config : {};
+  return {
+    completed: Boolean(next.completed),
+    competitor_radar: String(next.competitor_radar || "").trim(),
+    sources: Array.isArray(next.sources) ? next.sources.map(normalizeSourceRow) : [],
+  };
+}
+
 function renderSourceConfigRows() {
   const rows = Array.isArray(SOURCE_CONFIG.sources) && SOURCE_CONFIG.sources.length
     ? SOURCE_CONFIG.sources
     : [blankSourceRow()];
   SOURCE_CONFIG.sources = rows.map(normalizeSourceRow);
+  document.getElementById("competitorRadarInput").value = SOURCE_CONFIG.competitor_radar || "";
   document.getElementById("sourceConfigRows").innerHTML = SOURCE_CONFIG.sources.map((row, index) => `
     <div class="sourceConfigRow" data-row-index="${index}">
       <select data-field="platform">${buildOptionMarkup(SOURCE_PLATFORM_OPTIONS, row.platform)}</select>
@@ -378,6 +392,10 @@ function collectSourceConfigRows() {
   return rows.filter((row) => row.source_url);
 }
 
+function collectCompetitorRadar() {
+  return String(document.getElementById("competitorRadarInput")?.value || "").trim();
+}
+
 function setSourceConfigError(message) {
   const target = document.getElementById("sourceConfigError");
   if (!message) {
@@ -400,23 +418,26 @@ function hideSourceConfigOverlay() {
   document.getElementById("sourceConfigOverlay").classList.add("hidden");
 }
 
+function canDismissSourceConfig() {
+  return Boolean(SOURCE_CONFIG.completed || collectSourceConfigRows().length);
+}
+
 async function ensureSourceConfigLoaded() {
   if (REPORT?.source_config) {
-    SOURCE_CONFIG = {
+    SOURCE_CONFIG = normalizeSourceConfig({
       completed: Boolean(REPORT.source_config_completed || REPORT.source_config?.completed),
-      sources: Array.isArray(REPORT.source_config?.sources) ? REPORT.source_config.sources.map(normalizeSourceRow) : [],
-    };
+      sources: REPORT.source_config?.sources,
+      competitor_radar: REPORT.source_config?.competitor_radar,
+    });
     return;
   }
   const payload = await fetchJson("/api/source-config");
-  SOURCE_CONFIG = {
-    completed: Boolean(payload?.completed),
-    sources: Array.isArray(payload?.sources) ? payload.sources.map(normalizeSourceRow) : [],
-  };
+  SOURCE_CONFIG = normalizeSourceConfig(payload);
 }
 
 async function saveSourceConfig() {
   const rows = collectSourceConfigRows();
+  const competitorRadar = collectCompetitorRadar();
   if (!rows.length) {
     setSourceConfigError("Cần ít nhất 1 source có URL trước khi tiếp tục.");
     return;
@@ -427,11 +448,12 @@ async function saveSourceConfig() {
     return;
   }
   setSourceConfigError("");
-  const saved = await postJson("/api/source-config", { sources: rows });
-  SOURCE_CONFIG = {
+  const saved = await postJson("/api/source-config", { sources: rows, competitor_radar: competitorRadar });
+  SOURCE_CONFIG = normalizeSourceConfig({
     completed: Boolean(saved?.completed),
-    sources: Array.isArray(saved?.sources) ? saved.sources.map(normalizeSourceRow) : rows,
-  };
+    sources: Array.isArray(saved?.sources) ? saved.sources : rows,
+    competitor_radar: saved?.competitor_radar || competitorRadar,
+  });
   if (REPORT) {
     REPORT.source_config_completed = SOURCE_CONFIG.completed;
     REPORT.source_config = SOURCE_CONFIG;
@@ -1497,6 +1519,8 @@ function render() {
   document.getElementById("account-pill").textContent = `${copy.accountPrefix} · ${brandName}`;
   document.getElementById("generated-pill").textContent = formatDateTime(REPORT.generated_at);
   document.getElementById("branch-pill").textContent = `${(REPORT.branches || []).length} ${copy.branches}`;
+  document.getElementById("source-settings-label").textContent = copy.sourceSetupLabel;
+  document.getElementById("sourceConfigClose").textContent = copy.sourceCloseLabel;
   document.getElementById("fromDate").value = REPORT.date_range?.from || "";
   document.getElementById("toDate").value = REPORT.date_range?.to || "";
   document.getElementById("brand-logo-caption").textContent = `${brandName} / Client Logo`;
@@ -1533,6 +1557,9 @@ async function bootstrap() {
   const aiFab = document.getElementById("aiFab");
   const addSourceRow = document.getElementById("addSourceRow");
   const saveSourceConfigButton = document.getElementById("saveSourceConfig");
+  const sourceSettingsButton = document.getElementById("sourceSettingsButton");
+  const sourceConfigCloseButton = document.getElementById("sourceConfigClose");
+  const sourceConfigBackdrop = document.querySelector(".sourceConfigBackdrop");
   const savedTheme = window.localStorage.getItem("meili-dashboard-theme") || "default";
   const savedLanguage = window.localStorage.getItem("meili-dashboard-language") || "vi";
   const savedView = window.localStorage.getItem("meili-dashboard-view") || "all";
@@ -1577,11 +1604,25 @@ async function bootstrap() {
     SOURCE_CONFIG.sources.push(blankSourceRow());
     renderSourceConfigRows();
   });
+  sourceSettingsButton.addEventListener("click", () => {
+    showSourceConfigOverlay();
+  });
   saveSourceConfigButton.addEventListener("click", async () => {
     try {
       await saveSourceConfig();
     } catch (error) {
       setSourceConfigError(error.message || "Không thể lưu source config.");
+    }
+  });
+  sourceConfigCloseButton.addEventListener("click", () => {
+    if (canDismissSourceConfig()) hideSourceConfigOverlay();
+  });
+  sourceConfigBackdrop?.addEventListener("click", () => {
+    if (canDismissSourceConfig()) hideSourceConfigOverlay();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("sourceConfigOverlay").classList.contains("hidden") && canDismissSourceConfig()) {
+      hideSourceConfigOverlay();
     }
   });
   aiFab.addEventListener("click", () => {

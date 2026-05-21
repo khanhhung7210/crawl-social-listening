@@ -23,7 +23,7 @@ class DashboardRepository(Protocol):
     def get_source_config(self) -> dict:
         ...
 
-    def save_source_config(self, config: dict | list[dict]) -> dict:
+    def save_source_config(self, sources: list[dict]) -> dict:
         ...
 
 
@@ -43,12 +43,10 @@ class JsonDashboardRepository:
         return payload
 
     def get_source_config(self) -> dict:
-        return {"completed": True, "sources": [], "competitor_radar": ""}
+        return {"completed": True, "sources": []}
 
-    def save_source_config(self, config: dict | list[dict]) -> dict:
-        sources = config.get("sources") if isinstance(config, dict) else config
-        competitor_radar = config.get("competitor_radar") if isinstance(config, dict) else ""
-        return {"completed": True, "sources": sources or [], "competitor_radar": competitor_radar or ""}
+    def save_source_config(self, sources: list[dict]) -> dict:
+        return {"completed": True, "sources": sources}
 
     def _load(self) -> dict:
         payload = json.loads(self.data_file.read_text(encoding="utf-8"))
@@ -74,12 +72,10 @@ class MongoDashboardRepository:
         return None
 
     def get_source_config(self) -> dict:
-        return {"completed": False, "sources": [], "competitor_radar": ""}
+        return {"completed": False, "sources": []}
 
-    def save_source_config(self, config: dict | list[dict]) -> dict:
-        sources = config.get("sources") if isinstance(config, dict) else config
-        competitor_radar = config.get("competitor_radar") if isinstance(config, dict) else ""
-        return {"completed": bool(sources), "sources": sources or [], "competitor_radar": competitor_radar or ""}
+    def save_source_config(self, sources: list[dict]) -> dict:
+        return {"completed": bool(sources), "sources": sources}
 
     def get_sentiment_rows(self, film_title: str | None = None) -> list[dict]:
         query = build_film_query(film_title)
@@ -180,7 +176,7 @@ class PostgresDashboardRepository:
         self._ensure_brand_source_config_table()
         brand_id = self._brand_id()
         if not brand_id:
-            return {"completed": False, "sources": [], "competitor_radar": ""}
+            return {"completed": False, "sources": []}
         rows = self._query_json(
             f"""
             SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.include_in_dashboard DESC, t.priority, t.platform, t.channel_name), '[]'::json)
@@ -199,28 +195,14 @@ class PostgresDashboardRepository:
             ) t;
             """
         ) or []
-        competitor_radar = ""
-        for row in rows:
-            metadata = row.get("metadata") if isinstance(row, dict) else None
-            if isinstance(metadata, dict) and str(metadata.get("competitor_radar") or "").strip():
-                competitor_radar = str(metadata.get("competitor_radar") or "").strip()
-                break
-        return {"completed": bool(rows), "sources": rows, "competitor_radar": competitor_radar}
+        return {"completed": bool(rows), "sources": rows}
 
-    def save_source_config(self, config: dict | list[dict]) -> dict:
+    def save_source_config(self, sources: list[dict]) -> dict:
         self._ensure_brand_source_config_table()
         brand_id = self._brand_id()
         if not brand_id:
             raise RuntimeError(f"Brand slug not found: {self.brand_slug}")
-        sources = config.get("sources") if isinstance(config, dict) else config
-        competitor_radar = str(config.get("competitor_radar") or "").strip() if isinstance(config, dict) else ""
-        source_rows = sources if isinstance(sources, list) else []
-        normalized_sources = [row for row in (self._normalize_source_config(source) for source in source_rows) if row]
-        if competitor_radar:
-            for row in normalized_sources:
-                metadata = dict(row.get("metadata") or {})
-                metadata["competitor_radar"] = competitor_radar
-                row["metadata"] = metadata
+        normalized_sources = [row for row in (self._normalize_source_config(source) for source in sources) if row]
         statements = [f"DELETE FROM {self.schema}.brand_source_configs WHERE brand_id = {sql_str(brand_id)};"]
         for row in normalized_sources:
             statements.append(
@@ -2108,21 +2090,39 @@ class PostgresDashboardRepository:
                     ["Proof selected", max(8, proof_count * 4)],
                     ["Ready for content", max(4, proof_count * 2)],
                     ["Used in campaign", max(1, proof_count)],
-                ],
+        ]
+
+        # NEW: 4 modules from mockup v16
+        modules.extend([
+            self._build_crisis_spike_module_v2(),
+            self._build_founder_watch_module_v2(),
+            self._build_qualified_negative_module_v2(),
+            self._build_topic_lifecycle_module_v2(),
+        ])
+
+        return modules
                 "analysis": [
                     "Review tốt hiện vẫn đang được dùng dưới khả năng thật của nó.",
                     "Pipeline này là bridge giữa Reputation và Marketing, không nên để review tốt nằm chết trong DB.",
-                ],
+        ]
+
+        # NEW: 4 modules from mockup v16
+        modules.extend([
+            self._build_crisis_spike_module_v2(),
+            self._build_founder_watch_module_v2(),
+            self._build_qualified_negative_module_v2(),
+            self._build_topic_lifecycle_module_v2(),
+        ])
+
+        return modules
                 "action": {"guardrail": "Safe to Amplify", "owner": "Marketing", "cta": "Create Social Proof Campaign"},
                 "evidence_query": "Social Proof Pipeline",
             },
         ]
 
-        # Replace old Crisis Spike Monitor with real data version
-        modules[0] = self._build_crisis_spike_module_v2()
-
-        # NEW: Add 3 more modules from mockup v16
+        # NEW: 4 modules from mockup v16
         modules.extend([
+            self._build_crisis_spike_module_v2(),
             self._build_founder_watch_module_v2(),
             self._build_qualified_negative_module_v2(),
             self._build_topic_lifecycle_module_v2(),

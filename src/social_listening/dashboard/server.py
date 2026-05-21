@@ -85,7 +85,7 @@ def create_app(repository=None):
                 sources = payload.get("sources") if isinstance(payload, dict) else []
                 if not isinstance(sources, list):
                     return respond_json(start_response, {"error": "sources must be a list"}, status="400 Bad Request")
-                saved = repo.save_source_config(sources)
+                saved = repo.save_source_config(payload if isinstance(payload, dict) else {"sources": sources})
                 return respond_json(start_response, saved)
             if path == "/health" and method == "GET":
                 return respond_json(start_response, {"ok": True})

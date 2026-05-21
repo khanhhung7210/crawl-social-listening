@@ -444,12 +444,22 @@ th{background:#fbfdff;font-size:12px;text-transform:uppercase;letter-spacing:.03
 .sourceConfigOverlay.hidden{display:none}
 .sourceConfigBackdrop{position:absolute;inset:0;background:rgba(12,18,32,.52);backdrop-filter:blur(8px)}
 .sourceConfigModal{position:relative;z-index:1;width:min(1200px,calc(100vw - 40px));max-height:calc(100vh - 40px);overflow:auto;background:#fff;border:1px solid rgba(24,74,58,.14);border-radius:28px;padding:28px;box-shadow:0 28px 80px rgba(10,20,40,.18);display:grid;gap:18px}
+.settingsBtn{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(24,74,58,.18);background:#fff;border-radius:14px;padding:10px 14px;font:inherit;font-weight:700;color:#184A3A;cursor:pointer;box-shadow:0 8px 20px rgba(10,20,40,.06)}
+.settingsBtn:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(10,20,40,.1)}
+.settingsBtnIcon{font-size:16px;line-height:1}
+.sourceConfigHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
 .sourceConfigHead h3{margin:0;font-size:28px}
 .sourceConfigHead p{margin:8px 0 0;color:#5e6675;max-width:860px;line-height:1.5}
+.sourceConfigClose{border:1px solid rgba(24,74,58,.16);background:#fff;border-radius:14px;padding:10px 14px;font:inherit;font-weight:700;color:#243042;cursor:pointer;white-space:nowrap}
 .sourceConfigSummary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-radius:20px;background:linear-gradient(135deg,rgba(24,74,58,.08),rgba(200,168,87,.10))}
 .sourceHint{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:#184A3A;color:#fff;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 .sourceConfigSummary strong{font-size:18px}
 .sourceConfigSummary small{color:#5e6675}
+.sourceConfigRadar{display:grid;gap:10px;padding:16px 18px;border-radius:20px;background:#faf7ef;border:1px solid rgba(200,168,87,.24)}
+.sourceConfigField{display:grid;gap:6px}
+.sourceConfigField span{font-size:15px;font-weight:800;color:#243042}
+.sourceConfigField small{color:#6a7180;line-height:1.5}
+.sourceConfigTextarea{width:100%;border:1px solid rgba(24,74,58,.18);background:#fff;border-radius:16px;padding:14px 16px;font:inherit;line-height:1.5;resize:vertical;min-height:110px}
 .sourceConfigTable{display:grid;gap:10px}
 .sourceConfigTableHead,.sourceConfigRow{display:grid;grid-template-columns:120px 1.2fr 2fr 150px 130px 96px 88px 48px;gap:10px;align-items:center}
 .sourceConfigTableHead{padding:0 6px;color:#6a7180;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
@@ -475,4 +485,7 @@ th{background:#fbfdff;font-size:12px;text-transform:uppercase;letter-spacing:.03
   .sourceConfigRow{grid-template-columns:1fr}
   .sourceConfigActions{flex-direction:column}
   .secondaryBtn,.primaryBtn{width:100%}
+  .settingsBtn{width:100%;justify-content:center}
+  .sourceConfigHead{flex-direction:column}
+  .sourceConfigClose{width:100%}
 }
