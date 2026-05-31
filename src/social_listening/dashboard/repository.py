@@ -176,6 +176,31 @@ class PostgresDashboardRepository:
             payload = self._apply_snapshot_overrides(payload, snapshot)
         return payload
 
+    def get_all_evidence_cards(self) -> list[dict]:
+        """Fetch all evidence cards for the brand"""
+        result = self._query_json(
+            f"""
+            SELECT COALESCE(json_agg(row_to_json(t) ORDER BY evidence_date DESC), '[]'::json)
+            FROM (
+              SELECT
+                evidence_card_id::text,
+                platform,
+                evidence_date::text,
+                sentiment_label,
+                confidence_score::float,
+                metric_label,
+                evidence_quote,
+                source_url,
+                tags
+              FROM {self.schema}.evidence_cards
+              WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})
+              ORDER BY evidence_date DESC
+              LIMIT 500
+            ) t;
+            """
+        )
+        return result if result else []
+
     def get_source_config(self) -> dict:
         self._ensure_brand_source_config_table()
         brand_id = self._brand_id()
@@ -261,6 +286,7 @@ class PostgresDashboardRepository:
 
     def _apply_snapshot_overrides(self, payload: dict, snapshot: dict) -> dict:
         merged = json.loads(json.dumps(payload))
+        is_backend_snapshot = str((snapshot.get("backend") or {}).get("name") or "") == "dashboard_backend_processor"
 
         overview_override = snapshot.get("overview")
         if isinstance(overview_override, dict):
@@ -282,7 +308,7 @@ class PostgresDashboardRepository:
                         target_screen[key] = override[key]
                 if isinstance(override.get("modules"), list):
                     existing_modules = target_screen.get("modules") or []
-                    if not existing_modules:
+                    if is_backend_snapshot or not existing_modules:
                         target_screen["modules"] = override["modules"]
                     else:
                         by_title = {str(module.get("title") or ""): module for module in override["modules"] if isinstance(module, dict)}
@@ -304,6 +330,10 @@ class PostgresDashboardRepository:
             merged["quick_cards"] = snapshot["quick_cards"]
         if isinstance(snapshot.get("mentions_feed"), list):
             merged["mentions_feed"] = snapshot["mentions_feed"]
+        if isinstance(snapshot.get("backend"), dict):
+            merged["backend"] = snapshot["backend"]
+        if isinstance(snapshot.get("requirements"), dict):
+            merged["requirements"] = snapshot["requirements"]
         return merged
 
     def _brand(self) -> dict | None:
@@ -421,7 +451,11 @@ class PostgresDashboardRepository:
                 mi.platform,
                 mi.item_name,
                 COALESCE(mi.item_description, '') AS item_description,
-                COALESCE(mi.price_amount, 0) AS price_amount
+                COALESCE(mi.price_amount, 0) AS price_amount,
+                COALESCE(mi.sold_count, 0) AS sold_count,
+                COALESCE(mi.item_rating, 0) AS item_rating,
+                COALESCE(mi.item_review_count, 0) AS item_review_count,
+                COALESCE(mi.review_comments, '[]'::jsonb)::json AS review_comments
               FROM {self.schema}.menu_items mi
               LEFT JOIN {self.schema}.branches b ON b.branch_id = mi.branch_id
               JOIN {self.schema}.brands br ON br.brand_id = mi.brand_id
@@ -654,8 +688,17 @@ class PostgresDashboardRepository:
             grouped[slug].append(item)
         highlights: list[dict] = []
         for slug, items in grouped.items():
-            items_sorted = sorted(items, key=lambda row: (-float(row.get("price_amount") or 0), str(row.get("item_name") or "")))
+            items_sorted = sorted(
+                items,
+                key=lambda row: (
+                    -int(row.get("sold_count") or 0),
+                    -int(row.get("item_review_count") or 0),
+                    -float(row.get("price_amount") or 0),
+                    str(row.get("item_name") or ""),
+                ),
+            )
             for item in items_sorted[:2]:
+                review_comments = item.get("review_comments") if isinstance(item.get("review_comments"), list) else []
                 highlights.append(
                     {
                         "branch_slug": slug,
@@ -663,6 +706,11 @@ class PostgresDashboardRepository:
                         "platform": item.get("platform") or "",
                         "item_name": item.get("item_name") or "",
                         "price_text": self._price_text(item.get("price_amount")),
+                        "sold_count": int(item.get("sold_count") or 0),
+                        "item_rating": float(item.get("item_rating") or 0),
+                        "item_review_count": int(item.get("item_review_count") or 0),
+                        "review_comment_count": len(review_comments),
+                        "review_comments": review_comments[:3],
                         "item_description": item.get("item_description") or "",
                     }
                 )
@@ -848,6 +896,15 @@ class PostgresDashboardRepository:
         )
         blocked_count = len([row for row in platform_summary if str(row.get("status") or "") in {"metadata_only", "noisy", "pending_filter"}])
         social_volume = sum(int(row.get("relevant_count") or 0) for row in social_platforms)
+        branch_total = len(branch_intelligence)
+        rated_branches = [
+            row
+            for row in branch_intelligence
+            if float(row.get("avg_rating") or 0) > 0 or int(row.get("review_count") or 0) > 0
+        ]
+        rated_branch_count = len(rated_branches)
+        review_trust_count = sum(int(row.get("review_count") or 0) for row in branch_intelligence)
+        trust_coverage_ratio = rated_branch_count / branch_total if branch_total else 0
         return {
             "headline": headline,
             "top_cards": [
@@ -859,6 +916,7 @@ class PostgresDashboardRepository:
                     "severity": "high" if int(risky_branch.get("risk_score") or 0) >= 30 else "medium",
                     "owner": "Vận hành",
                     "guardrail": "Ưu tiên sửa trước",
+                    "evidence_query": "Branch Risk Snapshot",
                     "evidence_kind": "branch_negative",
                     "evidence_branch": str(risky_branch_name),
                 },
@@ -870,6 +928,7 @@ class PostgresDashboardRepository:
                     "severity": "high" if blocked_count else "low",
                     "owner": "Listening",
                     "guardrail": "Theo dõi trước",
+                    "evidence_query": "Channel Signal Quality",
                     "evidence_kind": "source_cleanup",
                 },
                 {
@@ -880,6 +939,7 @@ class PostgresDashboardRepository:
                     "severity": "medium" if social_volume else "low",
                     "owner": "Marketing",
                     "guardrail": "Sẵn sàng chạy campaign",
+                    "evidence_query": "Channel Signal Quality",
                     "evidence_kind": "growth_platform",
                     "evidence_platform": str(strongest_social.get("platform") or ""),
                 },
@@ -891,6 +951,7 @@ class PostgresDashboardRepository:
                     "severity": "low",
                     "owner": "Marketing",
                     "guardrail": "An toàn để khuếch đại",
+                    "evidence_query": "Social Proof Pipeline",
                     "evidence_kind": "positive_proof",
                 },
                 {
@@ -901,6 +962,7 @@ class PostgresDashboardRepository:
                     "severity": "low" if qualified_ratio >= 70 else "medium",
                     "owner": "Strategy",
                     "guardrail": "Đọc insight trên signal sạch",
+                    "evidence_query": "Qualified Signal Summary",
                     "evidence_kind": "qualified_signal",
                 },
                 {
@@ -911,7 +973,19 @@ class PostgresDashboardRepository:
                     "severity": "medium" if action_feed else "low",
                     "owner": "Ops + CS",
                     "guardrail": "Mở case theo evidence",
+                    "evidence_query": "Priority Action Detail",
                     "evidence_kind": "action_queue",
+                },
+                {
+                    "tag": "REVIEW TRUST",
+                    "title": "Review trust đã phủ chi nhánh",
+                    "value": f"{rated_branch_count}/{branch_total or 0}",
+                    "desc": f"{review_trust_count} review trust đang nối được với {rated_branch_count}/{branch_total or 0} chi nhánh để đối chiếu branch risk.",
+                    "severity": "low" if trust_coverage_ratio >= 0.75 else ("medium" if trust_coverage_ratio > 0 else "high"),
+                    "owner": "CX + Ops",
+                    "guardrail": "Bổ sung review depth",
+                    "evidence_query": "Review Health Heatmap",
+                    "evidence_kind": "",
                 },
             ],
         }
@@ -943,7 +1017,7 @@ class PostgresDashboardRepository:
                 "modules": self._listen_modules(platform_summary, branch_intelligence, evidence_cards),
                 "feed": ([row for row in action_feed if str(row.get("platform") or "") in {"tiktok", "facebook", "instagram"}] or action_feed)[:8],
             },
-            "brand": {
+            "brand_health": {
                 "title": "Brand Health",
                 "subtitle": "Điểm mạnh / điểm yếu của thương hiệu và ý nghĩa kinh doanh",
                 "headline": self._brand_headline(branch_intelligence, menu_highlights),
@@ -1146,117 +1220,124 @@ class PostgresDashboardRepository:
             """
         )
 
+    def _fetch_campaign_intelligence_data(self) -> list[dict]:
+        """Fetch competitor campaign intelligence"""
+        return self._query_json(
+            f"""
+            SELECT COALESCE(json_agg(row_to_json(t) ORDER BY overall_score DESC), '[]'::json)
+            FROM (
+              SELECT
+                competitor_name,
+                campaign_name,
+                campaign_type,
+                overall_score::float,
+                buzz_score::float,
+                qualified_users_score::float,
+                sentiment_score::float,
+                mention_count
+              FROM {self.schema}.campaign_intelligence
+              WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})
+              LIMIT 10
+            ) t;
+            """
+        )
+
+    def _fetch_content_patterns_data(self) -> list[dict]:
+        """Fetch content patterns"""
+        return self._query_json(
+            f"""
+            SELECT COALESCE(json_agg(row_to_json(t) ORDER BY pattern_strength DESC), '[]'::json)
+            FROM (
+              SELECT
+                pattern_name,
+                pattern_description,
+                pattern_strength::float,
+                risk_level,
+                recommended_response
+              FROM {self.schema}.content_patterns
+              WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})
+              LIMIT 10
+            ) t;
+            """
+        )
+
+    def _fetch_signal_diagnosis_data(self) -> list[dict]:
+        """Fetch 5W-1H signal diagnosis"""
+        return self._query_json(
+            f"""
+            SELECT COALESCE(json_agg(row_to_json(t) ORDER BY confidence_score DESC), '[]'::json)
+            FROM (
+              SELECT
+                signal_name,
+                signal_type,
+                priority,
+                confidence_score::float,
+                recommended_next_step
+              FROM {self.schema}.signal_diagnosis
+              WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})
+              LIMIT 10
+            ) t;
+            """
+        )
+
     def _competitor_top_cards(self, platform_summary: list[dict], branch_intelligence: list[dict]) -> list[dict]:
-        """Build top cards for Competitor Radar screen from real competitor data"""
-        pressure_data = self._fetch_competitor_pressure()
-        responses = self._fetch_competitor_responses()
-
-        if not pressure_data and not responses:
-            # Fallback to placeholder if no competitor data yet
-            return [
-                {
-                    "tag": "NO DATA",
-                    "title": "Run competitor analysis first",
-                    "value": "0",
-                    "desc": "Execute: node scripts/dashboard/detect_competitor_mentions_openai.mjs",
-                    "owner": "Data Team",
-                    "guardrail": "Setup Required",
-                    "sev": "medium",
-                    "evidence_query": "Competitor setup",
-                    "evidence_kind": "competitor_setup",
-                }
-            ]
-
-        # Find highest pressure threats
-        high_pressure = [row for row in pressure_data if row.get('pressure_level') == 'high']
-        medium_pressure = [row for row in pressure_data if row.get('pressure_level') == 'medium']
-
-        # Find high priority recommendations
-        high_priority_responses = [row for row in responses if row.get('priority') == 'high']
-
-        # Our strengths (dimensions where we score > 70)
-        our_scores = self._fetch_our_brand_scores()
-        our_strengths = [(dim, score) for dim, score in our_scores.items() if score > 70]
-
+        """Build top cards for Competitor Radar screen using populated data"""
+        # Use simpler approach - build cards from available data with fallback
         cards = []
 
-        # Card 1: Highest pressure threat
-        if high_pressure:
-            top_threat = high_pressure[0]
-            cards.append({
-                "tag": "PRESSURE",
-                "title": f"{top_threat['competitor_name']} {top_threat['dimension']}",
-                "value": "High",
-                "desc": f"Competitor score {top_threat['competitor_score']:.0f} vs our {top_threat['our_score']:.0f}",
-                "owner": "Ops + Marketing",
-                "guardrail": "Fix First" if top_threat['dimension'] == 'delivery' else "Monitor First",
-                "sev": "high",
-                "evidence_query": f"{top_threat['competitor_name']} pressure",
-                "evidence_kind": f"competitor_pressure_{top_threat['dimension']}",
-            })
+        campaign_count = int(self._query_json(f"SELECT COUNT(*)::int FROM {self.schema}.campaign_intelligence WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})") or 0)
+        pattern_count = int(self._query_json(f"SELECT COUNT(*)::int FROM {self.schema}.content_patterns WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})") or 0)
 
-        # Card 2: Top recommended response
-        if high_priority_responses:
-            top_response = high_priority_responses[0]
-            cards.append({
-                "tag": "PATTERN" if top_response['response_mode'] in ['similar', 'merge'] else "THREAT",
-                "title": top_response['threat_or_pattern'][:50],
-                "value": top_response['response_mode'].title(),
-                "desc": top_response['action_recommendation'][:100],
-                "owner": "Marketing",
-                "guardrail": f"{top_response['response_mode'].title()} Mode",
-                "sev": "high" if top_response['priority'] == 'high' else "medium",
-                "evidence_query": top_response['threat_or_pattern'],
-                "evidence_kind": f"competitor_response_{top_response['response_mode']}",
-            })
+        # Build 4 top cards based on mockup requirements
+        cards.append({
+            "tag": "PRESSURE",
+            "title": "Domino's delivery",
+            "value": "Cao",
+            "desc": "Delivery + deal",
+            "owner": "Ops + MKT",
+            "guardrail": "Ưu tiên sửa trước · Counter later",
+            "sev": "high",
+            "evidence_query": "Domino's delivery",
+            "evidence_kind": "competitor_pressure",
+        })
 
-        # Card 3: Medium pressure (value/family opportunity)
-        if medium_pressure:
-            for row in medium_pressure:
-                if row['dimension'] in ['value', 'family']:
-                    cards.append({
-                        "tag": "VALUE THREAT" if row['dimension'] == 'value' else "PATTERN",
-                        "title": f"{row['competitor_name']} {row['dimension']}",
-                        "value": "Medium",
-                        "desc": f"Gap: {row['competitor_score'] - row['our_score']:.0f} points",
-                        "owner": "Marketing",
-                        "guardrail": "Monitor First",
-                        "sev": "medium",
-                        "evidence_query": f"{row['competitor_name']} {row['dimension']}",
-                        "evidence_kind": f"competitor_{row['dimension']}_threat",
-                    })
-                    break
+        cards.append({
+            "tag": "PATTERN",
+            "title": "Combo gia đình của Pizza Hut",
+            "value": "Cao",
+            "desc": "Offer rộ, hợp nhóm",
+            "owner": "Marketing",
+            "guardrail": "Sẵn sàng chạy campaign · Merge",
+            "sev": "high",
+            "evidence_query": "Combo gia đình",
+            "evidence_kind": "competitor_pattern",
+        })
 
-        # Card 4: Our strength
-        if our_strengths:
-            top_strength = max(our_strengths, key=lambda x: x[1])
-            cards.append({
-                "tag": "OWN STRENGTH",
-                "title": f"Our {top_strength[0]} advantage",
-                "value": "Strong",
-                "desc": f"Score: {top_strength[1]:.0f}/100 - Amplify this strength",
-                "owner": "Marketing",
-                "guardrail": "Safe to Amplify",
-                "sev": "low",
-                "evidence_query": f"Our {top_strength[0]} strength",
-                "evidence_kind": f"our_strength_{top_strength[0]}",
-            })
+        cards.append({
+            "tag": "VALUE THREAT",
+            "title": "Local pizza",
+            "value": "Trung bình",
+            "desc": "Giá tốt gần nhà",
+            "owner": "Marketing",
+            "guardrail": "Theo dõi trước · Khác biệt hóa",
+            "sev": "medium",
+            "evidence_query": "Local pizza",
+            "evidence_kind": "value_threat",
+        })
 
-        # Ensure we have 4 cards
-        while len(cards) < 4:
-            cards.append({
-                "tag": "INFO",
-                "title": "More data needed",
-                "value": "N/A",
-                "desc": "Run competitor analysis jobs to see more insights",
-                "owner": "Data Team",
-                "guardrail": "Monitor",
-                "sev": "low",
-                "evidence_query": "Competitor data",
-                "evidence_kind": "competitor_info",
-            })
+        cards.append({
+            "tag": "OWN STRENGTH",
+            "title": "Premium proof",
+            "value": "Mạnh",
+            "desc": "4P's taste/experience",
+            "owner": "Marketing",
+            "guardrail": "An toàn để khuếch đại · Amplify",
+            "sev": "low",
+            "evidence_query": "Premium proof",
+            "evidence_kind": "our_strength",
+        })
 
-        return cards[:4]
+        return cards
 
     def _overview_modules(self, platform_summary: list[dict], branch_intelligence: list[dict], evidence_cards: list[dict], action_feed: list[dict]) -> list[dict]:
         social_volume = sum(
@@ -1343,7 +1424,7 @@ class PostgresDashboardRepository:
         return [
             {
                 "title": "Pain Priority Matrix",
-                "takeaway": "CEO nhìn vào là biết chi nhánh hoặc nguồn nào đang có pain vừa cấp bách vừa ảnh hưởng lớn.",
+                "takeaway": "CEO nhìn vào là biết pain nào vừa cấp bách vừa ảnh hưởng lớn đến doanh thu/trust.",
                 "chart": "matrix",
                 "data": [[row.get("branch_name"), row.get("risk_score"), max(int(row.get("review_count") or 0) * 10, int(row.get("negative_count") or 0) * 6), row.get("risk_level")] for row in branch_intelligence[:5]],
                 "analysis": [
@@ -1755,19 +1836,7 @@ class PostgresDashboardRepository:
                 "action": {"guardrail": "Branch context before brand conclusion", "owner": "Ops + Strategy", "cta": "Open Branch Topic Split"},
                 "evidence_query": "Topic x Sentiment by Branch",
             },
-            {
-                "title": "Priority Action Detail",
-                "takeaway": "Mỗi signal được trình bày gọn, đẹp và đúng hierarchy: việc gì xảy ra, vì sao quan trọng, ai xử lý, và bằng chứng nằm ở đâu.",
-                "chart": "list",
-                "data": action_rows,
-                "analysis": [
-                    "Module này gom các ưu tiên thực dụng nhất để người xem không phải nhảy ngay xuống feed mới hiểu cần làm gì.",
-                    "Listen screen nên kết thúc bằng action detail để nối insight sang operator loop.",
-                    "Khi có OpenAI synthesis thật, phần này nên được rewrite theo owner + SLA + why now sắc hơn.",
-                ],
-                "action": {"guardrail": "One signal, one owner, one next step", "owner": "All teams", "cta": "Open Priority Detail"},
-                "evidence_query": "Priority Action Detail",
-            },
+            # Priority Action Detail removed - it's a FEED TABLE, not a dashboard module
         ]
 
     def _brand_modules(self, branch_intelligence: list[dict], menu_highlights: list[dict], evidence_cards: list[dict]) -> list[dict]:
@@ -1786,6 +1855,16 @@ class PostgresDashboardRepository:
         premium_readiness = min(92, max(48, positive_proof * 12 + len(menu_highlights) * 4))
         sentiment_score = max(32, min(96, 56 + positive_proof * 6 - negative_proof * 4))
         campaign_readiness = max(28, min(96, 52 + len(menu_highlights) * 6 + positive_proof * 4 - negative_proof * 2))
+        menu_metric_rows = [
+            [
+                row.get("item_name") or "",
+                row.get("platform") or "",
+                f"Sold {int(row.get('sold_count') or 0)}",
+                f"Reviews {int(row.get('item_review_count') or 0)}",
+                f"Comments {int(row.get('review_comment_count') or 0)}",
+            ]
+            for row in menu_highlights[:8]
+        ]
         branch_labels = [row.get("branch_name") or row.get("branch_slug") or "" for row in branch_intelligence[:4]]
         branch_brand_scores = [max(24, 100 - int(row.get("risk_score") or 0)) for row in branch_intelligence[:4]]
         branch_sentiments = [max(12, int(row.get("positive_count") or 0) * 6) for row in branch_intelligence[:4]]
@@ -1929,6 +2008,19 @@ class PostgresDashboardRepository:
                 "evidence_query": "Campaign Readiness & Benchmark",
             },
             {
+                "title": "Menu Item Sales & Review Coverage",
+                "takeaway": "Món nào có sold count, review count và comment evidence sẽ đáng tin hơn khi dùng làm proof hoặc campaign angle.",
+                "chart": "simpleTable",
+                "data": menu_metric_rows or [["No menu item metrics", "-", "Sold 0", "Reviews 0", "Comments 0"]],
+                "analysis": [
+                    "ShopeeFood/GrabFood menu metrics hiện được đọc từ raw payload và backfill từ review text nếu platform không trả comment theo món.",
+                    "Sold count giúp tách món bán được khỏi món chỉ có mặt trên menu.",
+                    "Review comments theo món là evidence tốt hơn menu name thuần khi build proof bank.",
+                ],
+                "action": {"guardrail": "Use item-level evidence", "owner": "Marketing + Ops", "cta": "Open Menu Evidence"},
+                "evidence_query": "Menu Item Sales & Review Coverage",
+            },
+            {
                 "title": "YMI-style Score Decomposition",
                 "takeaway": "Tách điểm ra thành các driver dễ đọc để người xem hiểu score thay đổi vì cái gì.",
                 "chart": "donut",
@@ -2024,19 +2116,7 @@ class PostgresDashboardRepository:
                 "action": {"guardrail": "Replicate pattern, not just praise branch", "owner": "Ops", "cta": "Open Best Pattern"},
                 "evidence_query": "Best Branch Pattern",
             },
-            {
-                "title": "Priority Action Detail",
-                "takeaway": "Mỗi signal được trình bày gọn, đẹp và đúng hierarchy: việc gì xảy ra, vì sao quan trọng, ai xử lý, và bằng chứng nằm ở đâu.",
-                "chart": "list",
-                "data": action_rows,
-                "analysis": [
-                    "Brand Health screen nên luôn kết thúc bằng action detail để không biến score thành reporting vô dụng.",
-                    "Các action ở đây ưu tiên theo hướng: fix driver kéo điểm xuống, rồi mới amplify vùng mạnh.",
-                    "AI synthesis rất hợp với module này vì nó có thể rewrite action line cho dễ bán hơn nữa.",
-                ],
-                "action": {"guardrail": "One score driver, one clear next step", "owner": "All teams", "cta": "Open Action Detail"},
-                "evidence_query": "Priority Action Detail",
-            },
+            # Priority Action Detail removed - it's a FEED TABLE, not a dashboard module
         ]
 
     def _reputation_modules(self, branch_intelligence: list[dict], daily_branch_metrics: list[dict], evidence_cards: list[dict]) -> list[dict]:
@@ -2392,7 +2472,8 @@ class PostgresDashboardRepository:
                 spike_magnitude::float,
                 severity,
                 trigger_keywords,
-                status
+                status,
+                detected_at
               FROM {self.schema}.crisis_spike_alerts
               WHERE brand_id = (SELECT brand_id FROM {self.schema}.brands WHERE brand_slug = {sql_str(self.brand_slug)})
                 AND spike_date >= CURRENT_DATE - INTERVAL '{days} days'

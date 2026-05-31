@@ -75,6 +75,13 @@ def main() -> int:
         records.append(run_query_with_retries(query))
 
     ensure_dir(OUTPUT_FILE.parent)
+    if records and not any(not record.get("error") for record in records):
+        failed_file = OUTPUT_FILE.with_name("shopeefood_simulator_full_failed.json")
+        failed_file.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n[shopeefood-full] all queries failed; saved errors to {failed_file}")
+        print(f"[shopeefood-full] kept existing output unchanged: {OUTPUT_FILE}")
+        return 1
+
     OUTPUT_FILE.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n[shopeefood-full] saved {len(records)} records to {OUTPUT_FILE}")
     return 0
@@ -179,11 +186,14 @@ def type_and_submit_query(driver, edit_field, query: str) -> None:
 
 def open_best_result(driver, query: str) -> str:
     tokens = normalize_tokens(query)
+    query_requires_meili = "meili" in tokens
     scored = []
     for text in visible_texts(driver):
         if not text:
             continue
         text_tokens = normalize_tokens(text)
+        if query_requires_meili and "meili" not in text_tokens:
+            continue
         overlap = len(tokens & text_tokens)
         if overlap == 0:
             continue
@@ -206,6 +216,8 @@ def open_best_result(driver, query: str) -> str:
             tap_center(rect)
             print(f"[shopeefood-full] tapped result text={text}")
             return text
+    if query_requires_meili:
+        raise RuntimeError(f"no Meili matching result found for query={query}")
     run_adb(["shell", "input", "tap", "720", "650"])
     time.sleep(3)
     print("[shopeefood-full] fallback tapped first result card")
@@ -371,7 +383,9 @@ def parse_reviews_from_texts(texts: list[str], restaurant_name: str, star_bucket
     reviews: list[dict] = []
     skip_tokens = (
         "ratings", "food delivery", "foody", "all", "with comment", "with photo",
-        "relevance", "nearby", "top sales",
+        "relevance", "nearby", "top sales", "come and share", "help others",
+        "that's all the results", "hình ảnh chỉ mang tính", "nhận xu",
+        "connection error", "please check your network", "loading...",
     )
     cleaned = [text.strip() for text in texts if text and not any(token in text.casefold() for token in skip_tokens)]
 
@@ -391,6 +405,9 @@ def parse_reviews_from_texts(texts: list[str], restaurant_name: str, star_bucket
             author = cleaned[index - 1]
         if index + 1 < len(cleaned) and DATE_RE.search(cleaned[index + 1]):
             created_at = cleaned[index + 1]
+        if not created_at and (not author or re.fullmatch(r"\(\d+\)", author)):
+            index += 1
+            continue
         if len(text) < 30:
             index += 1
             continue
@@ -445,8 +462,6 @@ def looks_like_store_name(text: str) -> bool:
     if any(token in lower for token in ("relevance", "nearby", "top sales", "freeship", "rating")):
         return False
     if "meili" in lower:
-        return True
-    if any(token in lower for token in ("ung văn khiêm", "mai văn vinh", "nguyễn văn khối", "nhiêu tứ")):
         return True
     return False
 

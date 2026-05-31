@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("threads", "tiktok", "youtube", "instagram", "facebook", "grabfood")]
+    [ValidateSet("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps", "shopeefood", "grabfood", "grabfood_web")]
     [string]$Platform,
 
     [Parameter(Mandatory = $true)]
@@ -70,7 +70,23 @@ $stepsByPlatform = @{
         "scripts/facebook/facebook_format_job.py",
         "scripts/facebook/facebook_mongodb_sync.py"
     )
+    "google_maps" = @(
+        "scripts/google_maps/google_maps_search_runner.py",
+        "scripts/google_maps/google_maps_review_runner.py",
+        "scripts/google_maps/google_maps_format_job.py",
+        "scripts/google_maps/google_maps_keyword_filter_job.py",
+        "scripts/google_maps/google_maps_mongodb_sync.py"
+    )
+    "shopeefood" = @(
+        "scripts/shopeefood/shopeefood_simulator_full_runner.py",
+        "scripts/shopeefood/shopeefood_format_job.py",
+        "scripts/shopeefood/shopeefood_keyword_filter_job.py",
+        "scripts/shopeefood/shopeefood_mongodb_sync.py"
+    )
     "grabfood" = @(
+        "scripts/grabfood/grabfood_app_explore_reviews.py"
+    )
+    "grabfood_web" = @(
         "scripts/grabfood/grabfood_search_runner.py",
         "scripts/grabfood/grabfood_search_filter.py",
         "scripts/grabfood/grabfood_detail_runner.py",

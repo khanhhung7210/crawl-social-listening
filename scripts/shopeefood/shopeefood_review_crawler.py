@@ -98,16 +98,28 @@ def build_driver() -> webdriver.Remote:
     options = UiAutomator2Options()
     options.platform_name = 'Android'
     options.device_name = 'emulator-5554'
-    options.app_package = 'com.deliverynow'
-    options.app_activity = 'foody.vn.deliverynow.SplashActivity'
+
+    # ShopeeFood app package (verified)
+    # To find: adb shell pm list packages | grep -i shopee
+    options.app_package = 'com.foody.vn'
+    options.app_activity = '.HomeActivity'  # or '.MainActivity'
+
     options.no_reset = True  # Keep login state
     options.automation_name = 'UiAutomator2'
 
-    driver = webdriver.Remote('http://127.0.0.1:4723', options=options)
-    time.sleep(3)  # Wait for app to load
+    try:
+        driver = webdriver.Remote('http://127.0.0.1:4723', options=options)
+        time.sleep(3)  # Wait for app to load
 
-    print("[shopeefood] Connected successfully")
-    return driver
+        print("[shopeefood] Connected successfully")
+        return driver
+    except Exception as exc:
+        print(f"[shopeefood] Failed to connect to Appium: {exc}")
+        print("[shopeefood] Make sure:")
+        print("  1. Android emulator is running: emulator -avd Pixel_5_API_30")
+        print("  2. Appium server is running: appium")
+        print("  3. ShopeeFood app is installed: adb install ShopeeFood.apk")
+        raise
 
 
 def crawl_restaurant_reviews(driver: webdriver.Remote, restaurant_url: str) -> list[dict]:
@@ -125,13 +137,22 @@ def crawl_restaurant_reviews(driver: webdriver.Remote, restaurant_url: str) -> l
 
     print(f"[shopeefood] Opening restaurant: {restaurant_name}")
 
-    # Option 1: Use deep link (if ShopeeFood supports it)
-    # deep_link = f"shopeefood://restaurant/{restaurant_slug}"
-    # os.system(f'adb shell am start -a android.intent.action.VIEW -d "{deep_link}"')
-    # time.sleep(5)
+    # Strategy: Use ADB to open URL
+    # This will trigger the app if it's configured to handle shopeefood.vn URLs
+    # Otherwise it opens in browser, which still might work
+    result = os.system(f'adb shell am start -a android.intent.action.VIEW -d "{restaurant_url}" 2>&1')
 
-    # Option 2: Use web URL (if app handles http intents)
-    os.system(f'adb shell am start -a android.intent.action.VIEW -d "{restaurant_url}"')
+    if result != 0:
+        print(f"[shopeefood] Warning: ADB command returned non-zero: {result}")
+        print(f"[shopeefood] Trying alternative approach...")
+
+        # Alternative: Manually search in app
+        # This requires the app to already be open
+        # Send search query via ADB input
+        search_query = restaurant_name.replace("'", "")
+        os.system(f'adb shell input text "{search_query}"')
+        os.system('adb shell input keyevent KEYCODE_ENTER')
+
     time.sleep(5)
 
     # TODO: Navigate to Reviews tab

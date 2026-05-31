@@ -23,6 +23,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--skip-enrich", action="store_true", help="Skip local enrichment stage")
+    parser.add_argument("--skip-foundation", action="store_true", help="Skip crawl foundation metrics stage")
     parser.add_argument("--skip-synthesis", action="store_true", help="Skip local dashboard snapshot stage")
     parser.add_argument("--skip-export", action="store_true", help="Skip dashboard JSON export stage")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running")
@@ -76,13 +77,19 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ["node", "scripts/dashboard/enrich_meili_postgres_local.mjs"],
         ),
         (
-            "Stage 2: Local Snapshot Synthesis",
-            "Building dashboard snapshot with deterministic business rules...",
-            args.skip_synthesis,
-            ["node", "scripts/dashboard/synthesize_dashboard_snapshot_local.mjs"],
+            "Stage 2: Crawl Foundation Metrics",
+            "Applying crawl schema, branch mapping, hourly aggregation, response tracking, action queue and proof assets...",
+            args.skip_foundation,
+            ["python3", "scripts/dashboard/build_crawl_foundation_metrics.py"],
         ),
         (
-            "Stage 3: Dashboard JSON Export",
+            "Stage 3: Dashboard Backend Processing",
+            "Building dashboard-ready snapshot from PostgreSQL and Dashboard_req_mapping.xlsx...",
+            args.skip_synthesis,
+            ["python3", "scripts/dashboard/process_dashboard_backend.py"],
+        ),
+        (
+            "Stage 4: Dashboard JSON Export",
             "Exporting dashboard payload from PostgreSQL...",
             args.skip_export,
             ["python3", "scripts/dashboard/export_dashboard_json.py"],
@@ -161,6 +168,7 @@ def print_config(args: argparse.Namespace) -> None:
         "BRAND_SLUG": os.getenv("BRAND_SLUG", "meili-mi-bo-dai-loan"),
         "DRY_RUN": str(args.dry_run),
         "SKIP_ENRICH": str(args.skip_enrich),
+        "SKIP_FOUNDATION": str(args.skip_foundation),
         "SKIP_SYNTHESIS": str(args.skip_synthesis),
         "SKIP_EXPORT": str(args.skip_export),
         "INTERVAL": str(args.interval),

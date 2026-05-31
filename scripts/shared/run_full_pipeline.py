@@ -64,7 +64,7 @@ PLATFORMS = {
         "name": "TikTok",
         "crawl_search": "scripts/tiktok/tiktok_search_runner.py",
         "crawl_detail": "scripts/tiktok/tiktok_video_runner.py",
-        "format_job": None,  # Not yet implemented
+        "format_job": "scripts/tiktok/tiktok_format_job.py",
         "keyword_filter": "scripts/tiktok/tiktok_keyword_filter_job.py",
         "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
         "has_enrich": False,
@@ -74,11 +74,59 @@ PLATFORMS = {
         "crawl_search": "scripts/youtube/youtube_search_runner.py",
         "crawl_detail": "scripts/youtube/youtube_video_runner.py",
         "format_job": "scripts/youtube/youtube_format_job.py",
-        "keyword_filter": None,  # Not yet implemented
+        "keyword_filter": "scripts/youtube/youtube_keyword_filter_job.py",
+        "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
+        "has_enrich": False,
+    },
+    "google_maps": {
+        "name": "Google Maps",
+        "crawl_search": "scripts/google_maps/google_maps_search_runner.py",
+        "crawl_detail": "scripts/google_maps/google_maps_review_runner.py",
+        "format_job": "scripts/google_maps/google_maps_format_job.py",
+        "keyword_filter": "scripts/google_maps/google_maps_keyword_filter_job.py",
+        "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
+        "has_enrich": False,
+    },
+    "shopeefood": {
+        "name": "ShopeeFood",
+        "crawl_search": "scripts/shopeefood/shopeefood_simulator_full_runner.py",
+        "crawl_detail": None,
+        "format_job": "scripts/shopeefood/shopeefood_format_job.py",
+        "keyword_filter": "scripts/shopeefood/shopeefood_keyword_filter_job.py",
+        "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
+        "has_enrich": False,
+    },
+    "grabfood_reviews": {
+        "name": "GrabFood Reviews",
+        "crawl_search": None,  # No search needed, uses keyword config URLs
+        "crawl_detail": "scripts/grabfood/grabfood_review_crawler.py",
+        "format_job": "scripts/grabfood/grabfood_review_format_job.py",
+        "keyword_filter": None,
+        "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
+        "has_enrich": False,
+    },
+    "grabfood_web": {
+        "name": "GrabFood Web",
+        "crawl_search": "scripts/grabfood/grabfood_search_runner.py",
+        "crawl_detail": "scripts/grabfood/grabfood_detail_runner.py",
+        "format_job": "scripts/grabfood/grabfood_format_job.py",
+        "keyword_filter": "scripts/grabfood/grabfood_keyword_filter_job.py",
         "postgres_import": "scripts/dashboard/import_meili_to_postgres.py",
         "has_enrich": False,
     },
 }
+
+DEFAULT_PLATFORMS = [
+    "threads",
+    "facebook",
+    "instagram",
+    "tiktok",
+    "youtube",
+    "google_maps",
+    "shopeefood",
+    "grabfood_web",
+    "grabfood_reviews",
+]
 
 
 class PipelineRunner:
@@ -290,7 +338,7 @@ def main():
         overall_start = datetime.now()
         results = {}
 
-        for platform in PLATFORMS.keys():
+        for platform in DEFAULT_PLATFORMS:
             print("\n")
             print("=" * 70)
             print(f"PLATFORM: {PLATFORMS[platform]['name'].upper()}")
@@ -306,7 +354,7 @@ def main():
                 return 1
 
             # Brief pause between platforms
-            if platform != list(PLATFORMS.keys())[-1]:
+            if platform != DEFAULT_PLATFORMS[-1]:
                 print("\nWaiting 5 seconds before next platform...")
                 time.sleep(5)
 

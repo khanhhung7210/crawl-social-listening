@@ -14,24 +14,26 @@ from social_listening.paths import ensure_dir
 from social_listening.review_utils import compact_whitespace, normalize_created_at, normalize_rating, resolve_comment_created_at
 
 
-INPUT_FILE = platform_raw_dir("shopeefood") / "shopeefood_all_shops.json"
+DEFAULT_INPUT_FILE = platform_raw_dir("shopeefood") / "shopeefood_all_shops.json"
+SIMULATOR_INPUT_FILE = platform_raw_dir("shopeefood") / "shopeefood_simulator_full.json"
 OUTPUT_FILE = platform_processed_dir("shopeefood") / "shopeefood_grouped_parsed.json"
 SOURCE_NAME = "shopeefood_format_job"
 
 
 def main() -> int:
-    if not INPUT_FILE.exists():
-        raise RuntimeError(f"Missing input file: {INPUT_FILE}")
+    input_file = resolve_input_file()
+    if not input_file.exists():
+        raise RuntimeError(f"Missing input file: {DEFAULT_INPUT_FILE} or {SIMULATOR_INPUT_FILE}")
 
-    payload = json.loads(INPUT_FILE.read_text(encoding="utf-8"))
+    payload = json.loads(input_file.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
-        raise RuntimeError("shopeefood_all_shops.json must be a JSON array")
+        raise RuntimeError(f"{input_file.name} must be a JSON array")
 
     records: list[dict] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
-        parsed = parse_shop_record(item)
+        parsed = parse_simulator_record(item, input_file) if input_file == SIMULATOR_INPUT_FILE else parse_shop_record(item, input_file)
         if parsed:
             records.append(parsed)
 
@@ -41,7 +43,11 @@ def main() -> int:
     return 0
 
 
-def parse_shop_record(item: dict) -> dict:
+def resolve_input_file() -> Path:
+    return DEFAULT_INPUT_FILE if DEFAULT_INPUT_FILE.exists() else SIMULATOR_INPUT_FILE
+
+
+def parse_shop_record(item: dict, input_file: Path) -> dict:
     metadata = item.get("shop_metadata") or {}
     api_payloads = item.get("api_payloads") or {}
     from_url_reply = (api_payloads.get("from_url") or {}).get("reply") or {}
@@ -75,7 +81,7 @@ def parse_shop_record(item: dict) -> dict:
         "post_keyword_match": False,
         "parent_keyword_match": bool(post_text or reviews),
         "source": SOURCE_NAME,
-        "source_file": str(INPUT_FILE.relative_to(PROJECT_ROOT)),
+        "source_file": str(input_file.relative_to(PROJECT_ROOT)),
         "stats": {
             "rating": rating,
             "review_count": review_count,
@@ -91,6 +97,129 @@ def parse_shop_record(item: dict) -> dict:
         "menu_items": menu_items,
         "comments": reviews,
     }
+
+
+def parse_simulator_record(item: dict, input_file: Path) -> dict:
+    if item.get("error"):
+        return {}
+
+    title = compact_whitespace(item.get("name")) or compact_whitespace(item.get("search_query"))
+    if not title:
+        return {}
+
+    crawled_at = normalize_created_at(item.get("crawled_at")) or normalize_created_at(item.get("finished_at")) or datetime.now(timezone.utc).isoformat()
+    shop_id = slugify_title(title)
+    post_text = " | ".join(
+        part
+        for part in [
+            title,
+            compact_whitespace(item.get("review_count")),
+            " | ".join(compact_whitespace(text) for text in (item.get("raw_texts") or [])[:20] if compact_whitespace(text)),
+        ]
+        if part
+    )
+    reviews = build_simulator_reviews(item.get("reviews") or [], shop_id, crawled_at)
+    menu_items = build_simulator_menu_items(item.get("dishes") or [])
+
+    return {
+        "platform": "shopeefood",
+        "post_id": shop_id,
+        "page_id": "",
+        "page_name": title,
+        "post_url": "",
+        "post_created_at": crawled_at,
+        "post_text": post_text,
+        "post_keyword_match": False,
+        "parent_keyword_match": bool(post_text or reviews),
+        "source": SOURCE_NAME,
+        "source_file": str(input_file.relative_to(PROJECT_ROOT)),
+        "stats": {
+            "rating": normalize_rating(item.get("rating")),
+            "review_count": parse_review_count_label(item.get("review_count")) or len(reviews),
+            "review_count_label": compact_whitespace(item.get("review_count")),
+            "address": "",
+            "search_keyword": str(item.get("search_query") or "").strip(),
+            "menu_item_count": len(menu_items),
+            "review_screen_opened": bool(item.get("review_screen_opened")),
+        },
+        "menu_items": menu_items,
+        "comments": reviews,
+    }
+
+
+def build_simulator_reviews(raw_reviews: list[dict], shop_id: str, crawled_at: str) -> list[dict]:
+    items: list[dict] = []
+    seen: set[str] = set()
+    for index, raw_review in enumerate(raw_reviews, start=1):
+        if not isinstance(raw_review, dict):
+            continue
+        text = compact_whitespace(raw_review.get("text"))
+        if not text:
+            continue
+        author = compact_whitespace(raw_review.get("author"))
+        key = f"{author.casefold()}|{text.casefold()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "external_id": f"review:{shop_id}:{index}",
+                "record_type": "review",
+                "author": author,
+                "text": text,
+                "created_at": resolve_comment_created_at(
+                    raw_review.get("created_at"),
+                    compact_whitespace(raw_review.get("created_at")),
+                    crawled_at,
+                ),
+                "created_at_label": compact_whitespace(raw_review.get("created_at")),
+                "url": "",
+                "post_id": shop_id,
+                "parent_comment_id": "",
+                "keyword_match": False,
+                "rating": normalize_rating(raw_review.get("star_bucket")),
+                "crawl_source": "appium",
+            }
+        )
+    return items
+
+
+def build_simulator_menu_items(raw_items: list[dict]) -> list[dict]:
+    items: list[dict] = []
+    seen: set[str] = set()
+    for index, raw_item in enumerate(raw_items, start=1):
+        if not isinstance(raw_item, dict):
+            continue
+        name = compact_whitespace(raw_item.get("name"))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        items.append(
+            {
+                "external_id": compact_whitespace(raw_item.get("external_id")) or f"menu:{index}",
+                "name": name,
+                "description": compact_whitespace(raw_item.get("description")),
+                "price_text": compact_whitespace(raw_item.get("price") or raw_item.get("price_text")),
+                "sold_count": compact_whitespace(raw_item.get("sold_count")),
+            }
+        )
+    return items
+
+
+def parse_review_count_label(value: object) -> int:
+    text = compact_whitespace(value)
+    if not text:
+        return 0
+    match = re.search(r"\d[\d.,]*", text)
+    if not match:
+        return 0
+    number = match.group(0)
+    if "." in number and "," in number:
+        number = number.replace(".", "").replace(",", ".")
+    elif "," in number:
+        number = number.replace(",", "." if "k" in text.casefold() else "")
+    multiplier = 1000 if "k" in text.casefold() else 1
+    return int(float(number) * multiplier)
 
 
 def build_reviews(raw_reviews: list[dict], shop_id: str, shop_url: str, crawled_at: str) -> list[dict]:

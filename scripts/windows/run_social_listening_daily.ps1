@@ -37,7 +37,7 @@ $env:TIKTOK_DEBUGGER_ADDRESS = "127.0.0.1:9223"
 $env:INSTAGRAM_DEBUGGER_ADDRESS = "127.0.0.1:9224"
 $env:YOUTUBE_DEBUGGER_ADDRESS = "127.0.0.1:9225"
 $env:FACEBOOK_DEBUGGER_ADDRESS = "127.0.0.1:9226"
-$env:GRABFOOD_REMOTE_DEBUGGING_PORT = "9229"
+$env:GOOGLE_MAPS_DEBUGGER_ADDRESS = "127.0.0.1:9227"
 
 function Start-DebugChrome {
     param(
@@ -67,10 +67,11 @@ try {
         Start-DebugChrome -Port 9224 -ProfileName "instagram"
         Start-DebugChrome -Port 9225 -ProfileName "youtube"
         Start-DebugChrome -Port 9226 -ProfileName "facebook"
+        Start-DebugChrome -Port 9227 -ProfileName "google_maps"
         Start-Sleep -Seconds 10
     }
 
-    $platforms = @("threads", "tiktok", "youtube", "instagram", "facebook")
+    $platforms = @("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps", "shopeefood", "grabfood")
     $jobs = @()
 
     foreach ($platform in $platforms) {

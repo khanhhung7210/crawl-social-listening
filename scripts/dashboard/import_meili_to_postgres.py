@@ -24,6 +24,7 @@ DEFAULT_KEYWORD_FILE = PROJECT_ROOT / "data" / "shared" / "social_keywords_meili
 SHOPEEFOOD_SIMULATOR_FULL_FILE = (
     PROJECT_ROOT / "data" / "shopeefood" / "raw" / "meili_mi_bo_dai_loan" / "shopeefood_simulator_full.json"
 )
+GRABFOOD_RAW_DIR = PROJECT_ROOT / "data" / "grabfood" / "raw" / "meili_mi_bo_dai_loan"
 
 
 def main() -> int:
@@ -38,11 +39,25 @@ def main() -> int:
     )
     social_mentions.extend(google_maps_mentions)
     shopeefood_simulator_records = load_json_array(SHOPEEFOOD_SIMULATOR_FULL_FILE)
+    grabfood_reviews = load_jsonl_array(
+        PROJECT_ROOT / "data" / "grabfood" / "processed" / "meili_mi_bo_dai_loan" / "grabfood_formatted_reviews.jsonl"
+    )
+    shopeefood_reviews = load_jsonl_array(
+        PROJECT_ROOT / "data" / "shopeefood" / "processed" / "meili_mi_bo_dai_loan" / "shopeefood_formatted_reviews.jsonl"
+    )
+    grabfood_detail_records = load_latest_grabfood_details()
 
     branch_rows = build_branch_rows(keyword_payload, google_maps_mentions)
     branch_rows = merge_shopeefood_branch_data(branch_rows)
     branch_rows = merge_google_maps_branch_data(branch_rows, google_maps_mentions)
-    sql = build_sql(branch_rows, social_mentions, shopeefood_simulator_records)
+    sql = build_sql(
+        branch_rows,
+        social_mentions,
+        shopeefood_simulator_records,
+        grabfood_reviews,
+        shopeefood_reviews,
+        grabfood_detail_records,
+    )
     with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False) as handle:
         handle.write(sql)
         sql_path = Path(handle.name)
@@ -63,6 +78,9 @@ def main() -> int:
                 "branches": len(branch_rows),
                 "social_mentions": len(social_mentions),
                 "shopeefood_simulator_records": len(shopeefood_simulator_records),
+                "grabfood_reviews": len(grabfood_reviews),
+                "shopeefood_reviews": len(shopeefood_reviews),
+                "grabfood_detail_records": len(grabfood_detail_records),
             },
             ensure_ascii=False,
             indent=2,
@@ -76,6 +94,32 @@ def load_json_array(path: Path) -> list[dict]:
         return []
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, list) else []
+
+
+def load_jsonl_array(path: Path) -> list[dict]:
+    """Load JSONL file (one JSON object per line)"""
+    if not path.exists():
+        return []
+    items: list[dict] = []
+    for line in path.read_text(encoding="utf-8").strip().split("\n"):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+            if isinstance(item, dict):
+                items.append(item)
+        except json.JSONDecodeError:
+            continue
+    return items
+
+
+def load_latest_grabfood_details() -> list[dict]:
+    files = sorted(GRABFOOD_RAW_DIR.glob("grabfood_details_*.json"), reverse=True)
+    for path in files:
+        records = load_json_array(path)
+        if any((record.get("dishes") or []) for record in records if isinstance(record, dict)):
+            return records
+    return []
 
 
 def build_branch_rows(keyword_payload: dict, google_maps_mentions: list[dict]) -> list[dict]:
@@ -169,10 +213,21 @@ def merge_google_maps_branch_data(branch_rows: list[dict], google_maps_mentions:
     return list(by_slug.values())
 
 
-def build_sql(branch_rows: list[dict], social_mentions: list[dict], shopeefood_simulator_records: list[dict]) -> str:
+def build_sql(
+    branch_rows: list[dict],
+    social_mentions: list[dict],
+    shopeefood_simulator_records: list[dict],
+    grabfood_reviews: list[dict] = None,
+    shopeefood_reviews: list[dict] = None,
+    grabfood_detail_records: list[dict] = None,
+) -> str:
+    grabfood_reviews = grabfood_reviews or []
+    shopeefood_reviews = shopeefood_reviews or []
+    grabfood_detail_records = grabfood_detail_records or []
     statements = [
         f"SET search_path TO {SCHEMA}, public;",
         upsert_brand_sql(),
+        ensure_menu_item_metric_columns_sql(),
     ]
     for row in branch_rows:
         statements.append(upsert_branch_sql(row))
@@ -200,7 +255,25 @@ def build_sql(branch_rows: list[dict], social_mentions: list[dict], shopeefood_s
         statements.extend(build_social_sql(item))
     for record in shopeefood_simulator_records:
         statements.extend(build_shopeefood_simulator_sql(record, branch_rows))
+    for record in grabfood_detail_records:
+        statements.extend(build_grabfood_detail_sql(record))
+    for review in grabfood_reviews:
+        statements.extend(build_grabfood_review_sql(review))
+    for review in shopeefood_reviews:
+        statements.extend(build_shopeefood_review_sql(review))
+    statements.append(backfill_menu_item_metrics_from_raw_payload_sql())
+    statements.append(backfill_menu_item_review_comments_sql())
     return "\n".join(statement for statement in statements if statement.strip()) + "\n"
+
+
+def ensure_menu_item_metric_columns_sql() -> str:
+    return f"""
+ALTER TABLE {SCHEMA}.menu_items
+  ADD COLUMN IF NOT EXISTS sold_count INTEGER,
+  ADD COLUMN IF NOT EXISTS item_rating NUMERIC(4, 2),
+  ADD COLUMN IF NOT EXISTS item_review_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS review_comments JSONB NOT NULL DEFAULT '[]'::JSONB;
+""".strip()
 
 
 def upsert_brand_sql() -> str:
@@ -622,10 +695,12 @@ SET is_relevant_fnb = EXCLUDED.is_relevant_fnb,
 
 def upsert_menu_item_sql(branch_slug: str, dish: dict, payload: dict) -> str:
     price_text = str(dish.get("display_price") or ((dish.get("price") or {}).get("text")) or "").strip()
+    metrics = extract_menu_item_metrics(dish)
     return f"""
 INSERT INTO {SCHEMA}.menu_items (
   brand_id, branch_id, platform, external_item_id, item_name, normalized_item_name,
-  item_description, price_amount, price_currency, captured_at, raw_payload
+  item_description, price_amount, price_currency, sold_count, item_rating, item_review_count,
+  review_comments, captured_at, raw_payload
 )
 SELECT
   br.brand_id,
@@ -637,6 +712,10 @@ SELECT
   {sql_str(dish.get('description'))},
   {sql_num(parse_price(price_text))},
   'VND',
+  {sql_int(metrics.get('sold_count'))},
+  {sql_num(metrics.get('item_rating'))},
+  {sql_int(metrics.get('item_review_count'))},
+  {sql_json(metrics.get('review_comments') or [])},
   {sql_timestamptz(payload.get('crawled_at'))},
   {sql_json(dish)}
 FROM {SCHEMA}.brands br
@@ -645,6 +724,13 @@ WHERE br.brand_slug = '{BRAND_SLUG}' AND b.branch_slug = {sql_str(branch_slug)}
 ON CONFLICT (platform, COALESCE(external_item_id, normalized_item_name, item_name), COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::UUID)) DO UPDATE
 SET item_description = EXCLUDED.item_description,
     price_amount = EXCLUDED.price_amount,
+    sold_count = COALESCE(EXCLUDED.sold_count, {SCHEMA}.menu_items.sold_count),
+    item_rating = COALESCE(EXCLUDED.item_rating, {SCHEMA}.menu_items.item_rating),
+    item_review_count = GREATEST(COALESCE(EXCLUDED.item_review_count, 0), COALESCE({SCHEMA}.menu_items.item_review_count, 0)),
+    review_comments = CASE
+      WHEN jsonb_array_length(COALESCE(EXCLUDED.review_comments, '[]'::jsonb)) > 0 THEN EXCLUDED.review_comments
+      ELSE {SCHEMA}.menu_items.review_comments
+    END,
     captured_at = EXCLUDED.captured_at,
     raw_payload = EXCLUDED.raw_payload,
     updated_at = NOW();
@@ -652,10 +738,12 @@ SET item_description = EXCLUDED.item_description,
 
 
 def upsert_simulator_menu_item_sql(branch_slug: str, dish: dict, payload: dict) -> str:
+    metrics = extract_menu_item_metrics(dish)
     return f"""
 INSERT INTO {SCHEMA}.menu_items (
   brand_id, branch_id, platform, external_item_id, item_name, normalized_item_name,
-  item_description, price_amount, price_currency, captured_at, raw_payload
+  item_description, price_amount, price_currency, sold_count, item_rating, item_review_count,
+  review_comments, captured_at, raw_payload
 )
 SELECT
   br.brand_id,
@@ -667,6 +755,10 @@ SELECT
   {sql_str(dish.get('description'))},
   {sql_num(parse_price(str(dish.get('price') or '')))},
   'VND',
+  {sql_int(metrics.get('sold_count'))},
+  {sql_num(metrics.get('item_rating'))},
+  {sql_int(metrics.get('item_review_count'))},
+  {sql_json(metrics.get('review_comments') or [])},
   {sql_timestamptz(payload.get('crawled_at'))},
   {sql_json(dish)}
 FROM {SCHEMA}.brands br
@@ -675,6 +767,76 @@ WHERE br.brand_slug = '{BRAND_SLUG}' AND b.branch_slug = {sql_str(branch_slug)}
 ON CONFLICT (platform, COALESCE(external_item_id, normalized_item_name, item_name), COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::UUID)) DO UPDATE
 SET item_description = EXCLUDED.item_description,
     price_amount = EXCLUDED.price_amount,
+    sold_count = COALESCE(EXCLUDED.sold_count, {SCHEMA}.menu_items.sold_count),
+    item_rating = COALESCE(EXCLUDED.item_rating, {SCHEMA}.menu_items.item_rating),
+    item_review_count = GREATEST(COALESCE(EXCLUDED.item_review_count, 0), COALESCE({SCHEMA}.menu_items.item_review_count, 0)),
+    review_comments = CASE
+      WHEN jsonb_array_length(COALESCE(EXCLUDED.review_comments, '[]'::jsonb)) > 0 THEN EXCLUDED.review_comments
+      ELSE {SCHEMA}.menu_items.review_comments
+    END,
+    captured_at = EXCLUDED.captured_at,
+    raw_payload = EXCLUDED.raw_payload,
+    updated_at = NOW();
+""".strip()
+
+
+def build_grabfood_detail_sql(record: dict) -> list[str]:
+    if not isinstance(record, dict):
+        return []
+    branch_slug = (
+        branch_slug_from_url(str(record.get("url") or ""))
+        or map_grabfood_branch_slug(record.get("name"))
+        or map_grabfood_branch_slug(record.get("restaurant_name"))
+    )
+    if not branch_slug:
+        return []
+    statements: list[str] = []
+    for dish in record.get("dishes") or []:
+        if isinstance(dish, dict):
+            statements.append(upsert_grabfood_menu_item_sql(branch_slug, dish, record))
+    return statements
+
+
+def upsert_grabfood_menu_item_sql(branch_slug: str, dish: dict, payload: dict) -> str:
+    metrics = extract_menu_item_metrics(dish)
+    price_text = str(dish.get("price") or dish.get("price_raw") or dish.get("display_price") or "").strip()
+    external_id = dish.get("dish_id") or dish.get("id") or dish.get("external_id")
+    item_name = dish.get("name") or dish.get("dish_name")
+    return f"""
+INSERT INTO {SCHEMA}.menu_items (
+  brand_id, branch_id, platform, external_item_id, item_name, normalized_item_name,
+  item_description, price_amount, price_currency, sold_count, item_rating, item_review_count,
+  review_comments, captured_at, raw_payload
+)
+SELECT
+  br.brand_id,
+  b.branch_id,
+  'grabfood',
+  {sql_str(external_id)},
+  {sql_str(item_name)},
+  {sql_str(normalize_name(item_name))},
+  {sql_str(dish.get('description'))},
+  {sql_num(parse_price(price_text))},
+  'VND',
+  {sql_int(metrics.get('sold_count'))},
+  {sql_num(metrics.get('item_rating'))},
+  {sql_int(metrics.get('item_review_count'))},
+  {sql_json(metrics.get('review_comments') or [])},
+  {sql_timestamptz(payload.get('detail_crawled_at') or payload.get('crawled_at'))},
+  {sql_json(dish)}
+FROM {SCHEMA}.brands br
+JOIN {SCHEMA}.branches b ON b.brand_id = br.brand_id
+WHERE br.brand_slug = '{BRAND_SLUG}' AND b.branch_slug = {sql_str(branch_slug)}
+ON CONFLICT (platform, COALESCE(external_item_id, normalized_item_name, item_name), COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::UUID)) DO UPDATE
+SET item_description = EXCLUDED.item_description,
+    price_amount = EXCLUDED.price_amount,
+    sold_count = COALESCE(EXCLUDED.sold_count, {SCHEMA}.menu_items.sold_count),
+    item_rating = COALESCE(EXCLUDED.item_rating, {SCHEMA}.menu_items.item_rating),
+    item_review_count = GREATEST(COALESCE(EXCLUDED.item_review_count, 0), COALESCE({SCHEMA}.menu_items.item_review_count, 0)),
+    review_comments = CASE
+      WHEN jsonb_array_length(COALESCE(EXCLUDED.review_comments, '[]'::jsonb)) > 0 THEN EXCLUDED.review_comments
+      ELSE {SCHEMA}.menu_items.review_comments
+    END,
     captured_at = EXCLUDED.captured_at,
     raw_payload = EXCLUDED.raw_payload,
     updated_at = NOW();
@@ -776,6 +938,143 @@ def parse_price(value: str) -> float | None:
     return float(digits) if digits else None
 
 
+def parse_count(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    multiplier = 1
+    if "k" in text:
+        multiplier = 1000
+    digits = re.search(r"\d+(?:[.,]\d+)?", text)
+    if not digits:
+        return None
+    try:
+        return int(float(digits.group(0).replace(",", ".")) * multiplier)
+    except Exception:
+        return None
+
+
+def extract_menu_item_metrics(dish: dict) -> dict:
+    reviews = dish.get("reviews") or dish.get("comments") or dish.get("review_comments") or []
+    review_comments = normalize_review_comments(reviews)
+    review_count = first_present_count(
+        dish.get("review_count"),
+        dish.get("item_review_count"),
+        dish.get("rating_count"),
+        len(review_comments),
+    )
+    return {
+        "sold_count": first_present_count(
+            dish.get("sold_count"),
+            dish.get("order_count"),
+            dish.get("order_count_raw"),
+            dish.get("order_count_min"),
+        ),
+        "item_rating": dish.get("item_rating") or dish.get("rating") or dish.get("avg_rating"),
+        "item_review_count": review_count,
+        "review_comments": review_comments,
+    }
+
+
+def first_present_count(*values: object) -> int | None:
+    for value in values:
+        parsed = parse_count(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def normalize_review_comments(values: object) -> list[dict]:
+    if not isinstance(values, list):
+        return []
+    comments: list[dict] = []
+    for value in values[:20]:
+        if isinstance(value, dict):
+            text = str(value.get("text") or value.get("review_text") or value.get("comment") or "").strip()
+            if not text:
+                continue
+            comments.append(
+                {
+                    "text": text[:500],
+                    "author": str(value.get("author") or value.get("reviewer_name") or "").strip(),
+                    "rating": value.get("rating"),
+                    "created_at": value.get("created_at") or value.get("review_created_at"),
+                    "source": value.get("source") or "platform_dish_payload",
+                }
+            )
+        else:
+            text = str(value).strip()
+            if text:
+                comments.append({"text": text[:500], "source": "platform_dish_payload"})
+    return comments
+
+
+def backfill_menu_item_review_comments_sql() -> str:
+    return f"""
+WITH matched AS (
+  SELECT
+    mi.menu_item_id,
+    jsonb_agg(
+      jsonb_build_object(
+        'review_id', r.review_id::text,
+        'text', LEFT(r.review_text, 500),
+        'rating', r.rating,
+        'reviewer_name', COALESCE(r.reviewer_name, ''),
+        'created_at', r.review_created_at,
+        'source', 'matched_review_text'
+      )
+      ORDER BY r.review_created_at DESC NULLS LAST
+    ) AS comments,
+    COUNT(*)::int AS comment_count,
+    ROUND(AVG(r.rating)::numeric, 2) AS avg_rating
+  FROM {SCHEMA}.menu_items mi
+  JOIN {SCHEMA}.reviews r
+    ON r.brand_id = mi.brand_id
+   AND r.platform = mi.platform
+   AND ((r.branch_id = mi.branch_id) OR (r.branch_id IS NULL AND mi.branch_id IS NULL))
+   AND LENGTH(COALESCE(r.review_text, '')) >= 8
+   AND (
+     LOWER(r.review_text) LIKE '%' || LOWER(mi.item_name) || '%'
+     OR (
+       LENGTH(split_part(mi.item_name, ' ', 1)) >= 3
+       AND LOWER(r.review_text) LIKE '%' || LOWER(split_part(mi.item_name, ' ', 1)) || '%'
+       AND (
+         LOWER(mi.item_name) LIKE '%mì%' OR LOWER(mi.item_name) LIKE '%bò%' OR LOWER(mi.item_name) LIKE '%gà%'
+         OR LOWER(mi.item_name) LIKE '%trà%' OR LOWER(mi.item_name) LIKE '%bánh%' OR LOWER(mi.item_name) LIKE '%sủi cảo%'
+       )
+     )
+   )
+  WHERE mi.platform IN ('shopeefood', 'grabfood')
+  GROUP BY mi.menu_item_id
+)
+UPDATE {SCHEMA}.menu_items mi
+SET review_comments = CASE
+      WHEN jsonb_array_length(COALESCE(mi.review_comments, '[]'::jsonb)) > 0 THEN mi.review_comments
+      ELSE matched.comments
+    END,
+    item_review_count = GREATEST(COALESCE(mi.item_review_count, 0), matched.comment_count),
+    item_rating = COALESCE(mi.item_rating, matched.avg_rating),
+    updated_at = NOW()
+FROM matched
+WHERE mi.menu_item_id = matched.menu_item_id;
+""".strip()
+
+
+def backfill_menu_item_metrics_from_raw_payload_sql() -> str:
+    return f"""
+UPDATE {SCHEMA}.menu_items
+SET sold_count = NULLIF(regexp_replace(COALESCE(raw_payload->>'sold_count', raw_payload->>'order_count', ''), '[^0-9]', '', 'g'), '')::int,
+    updated_at = NOW()
+WHERE platform IN ('shopeefood', 'grabfood')
+  AND sold_count IS NULL
+  AND (raw_payload ? 'sold_count' OR raw_payload ? 'order_count');
+""".strip()
+
+
 def build_shopeefood_review_id(branch_slug: str, review: dict) -> str:
     basis = "|".join(
         [
@@ -791,8 +1090,8 @@ def build_shopeefood_review_id(branch_slug: str, review: dict) -> str:
 
 
 def resolve_source_type(platform: str) -> str:
-    if platform in {"google_maps", "shopeefood"}:
-        return "delivery_review" if platform == "shopeefood" else "maps"
+    if platform in {"google_maps", "shopeefood", "grabfood"}:
+        return "delivery_review" if platform in {"shopeefood", "grabfood"} else "maps"
     return "social"
 
 
@@ -832,6 +1131,148 @@ def sql_num(value: object) -> str:
         return str(float(value))
     except Exception:
         return "NULL"
+
+
+def sql_int(value: object) -> str:
+    parsed = parse_count(value)
+    return str(parsed) if parsed is not None else "NULL"
+
+
+def build_grabfood_review_sql(review: dict) -> list[str]:
+    """Build SQL statements to import a GrabFood review"""
+    if not isinstance(review, dict):
+        return []
+
+    platform = str(review.get("platform") or "").strip()
+    if platform != "grabfood":
+        return []
+
+    external_review_id = str(review.get("external_review_id") or review.get("review_id") or "").strip()
+    if not external_review_id:
+        return []
+
+    review_text = str(review.get("review_text") or review.get("text") or "").strip()
+    if len(review_text) < 10:
+        return []
+
+    restaurant_url = str(review.get("restaurant_url") or "")
+    branch_slug = (
+        branch_slug_from_url(restaurant_url)
+        or map_grabfood_branch_slug(review.get("restaurant_name"))
+        or map_grabfood_branch_slug(review.get("branch_name"))
+    )
+    if branch_slug:
+        branch_join = f"LEFT JOIN {SCHEMA}.branches b ON b.brand_id = br.brand_id AND b.branch_slug = {sql_str(branch_slug)}"
+    else:
+        branch_join = f"LEFT JOIN {SCHEMA}.branches b ON FALSE"
+
+    sql = f"""
+INSERT INTO {SCHEMA}.reviews (
+  brand_id, branch_id, platform, external_review_id, external_post_id, reviewer_name, review_url,
+  review_text, rating, review_created_at, raw_payload
+)
+SELECT
+  br.brand_id,
+  b.branch_id,
+  'grabfood',
+  {sql_str(external_review_id)},
+  {sql_str(review.get('restaurant_name', ''))},
+  {sql_str(review.get('reviewer_name', 'Unknown'))},
+  {sql_str(restaurant_url)},
+  {sql_str(review_text)},
+  {sql_num(review.get('rating'))},
+  {sql_timestamptz(review.get('review_created_at'))},
+  {sql_json(review)}
+FROM {SCHEMA}.brands br
+{branch_join}
+WHERE br.brand_slug = '{BRAND_SLUG}'
+ON CONFLICT (platform, external_review_id, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::UUID)) DO UPDATE
+SET external_post_id = EXCLUDED.external_post_id,
+    reviewer_name = EXCLUDED.reviewer_name,
+    review_url = EXCLUDED.review_url,
+    review_text = EXCLUDED.review_text,
+    rating = EXCLUDED.rating,
+    review_created_at = EXCLUDED.review_created_at,
+    raw_payload = EXCLUDED.raw_payload,
+    updated_at = NOW();
+""".strip()
+
+    return [sql]
+
+
+def map_grabfood_branch_slug(value: object) -> str:
+    text = normalize_name(value)
+    if not text:
+        return ""
+    if "nhiêu tứ" in text or "nhieu tu" in text:
+        return "nhieu-tu"
+    if "mai văn vĩnh" in text or "mai van vinh" in text:
+        return "mai-van-vinh"
+    if "nguyễn văn khối" in text or "nguyen van khoi" in text:
+        return "nguyen-van-khoi"
+    if "ung văn khiêm" in text or "ung van khiem" in text:
+        return "ung-van-khiem"
+    return ""
+
+
+def build_shopeefood_review_sql(review: dict) -> list[str]:
+    """Build SQL statements to import a ShopeeFood review"""
+    if not isinstance(review, dict):
+        return []
+
+    platform = str(review.get("platform") or "").strip()
+    if platform != "shopeefood":
+        return []
+
+    external_review_id = str(review.get("external_review_id") or review.get("review_id") or "").strip()
+    if not external_review_id:
+        return []
+
+    review_text = str(review.get("review_text") or review.get("text") or "").strip()
+    if len(review_text) < 5:
+        return []
+
+    # Try to map restaurant to branch via URL
+    restaurant_url = str(review.get("restaurant_url") or "")
+    branch_slug = branch_slug_from_url(restaurant_url)
+
+    if branch_slug:
+        branch_join = f"LEFT JOIN {SCHEMA}.branches b ON b.brand_id = br.brand_id AND b.branch_slug = {sql_str(branch_slug)}"
+    else:
+        branch_join = f"LEFT JOIN {SCHEMA}.branches b ON FALSE"
+
+    sql = f"""
+INSERT INTO {SCHEMA}.reviews (
+  brand_id, branch_id, platform, external_review_id, external_post_id, reviewer_name, review_url,
+  review_text, rating, review_created_at, raw_payload
+)
+SELECT
+  br.brand_id,
+  b.branch_id,
+  'shopeefood',
+  {sql_str(external_review_id)},
+  {sql_str(review.get('restaurant_name', ''))},
+  {sql_str(review.get('reviewer_name', 'Unknown'))},
+  {sql_str(restaurant_url)},
+  {sql_str(review_text)},
+  {sql_num(review.get('rating'))},
+  {sql_timestamptz(review.get('review_created_at'))},
+  {sql_json(review)}
+FROM {SCHEMA}.brands br
+{branch_join}
+WHERE br.brand_slug = '{BRAND_SLUG}'
+ON CONFLICT (platform, external_review_id, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::UUID)) DO UPDATE
+SET external_post_id = EXCLUDED.external_post_id,
+    reviewer_name = EXCLUDED.reviewer_name,
+    review_url = EXCLUDED.review_url,
+    review_text = EXCLUDED.review_text,
+    rating = EXCLUDED.rating,
+    review_created_at = EXCLUDED.review_created_at,
+    raw_payload = EXCLUDED.raw_payload,
+    updated_at = NOW();
+""".strip()
+
+    return [sql]
 
 
 if __name__ == "__main__":

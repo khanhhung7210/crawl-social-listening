@@ -52,8 +52,12 @@ function buildLocalSnapshot(payload) {
     .filter((row) => Number(row.review_count || 0) > 0)
     .sort((left, right) => Number(right.review_count || 0) - Number(left.review_count || 0))[0] || {};
   const totalRelevant = platformSummary.reduce((sum, row) => sum + Number(row.relevant_count || 0), 0);
+  const totalMentions = platformSummary.reduce((sum, row) => sum + Number(row.mention_count || 0), 0);
   const negativeEvidence = evidenceCards.filter((row) => String(row.sentiment_label || '') === 'negative');
+  const positiveEvidence = evidenceCards.filter((row) => String(row.sentiment_label || '') === 'positive');
   const topNegative = negativeEvidence[0] || {};
+  const blockedSources = platformSummary.filter((row) => ['metadata_only', 'noisy', 'pending_filter'].includes(String(row.status || '')));
+  const actionFeedCount = actionFeed.length;
 
   const overviewHeadline = buildOverviewHeadline(topRisk, strongestSocial, trustedReview);
   const listenHeadline = buildListenHeadline(topRisk, strongestSocial, totalRelevant, negativeEvidence.length);
@@ -61,7 +65,19 @@ function buildLocalSnapshot(payload) {
   return {
     overview: {
       headline: overviewHeadline,
-      top_cards: buildTopCards(topRisk, strongestSocial, trustedReview, totalRelevant, negativeEvidence.length, topNegative),
+      top_cards: buildTopCards(
+        topRisk,
+        strongestSocial,
+        trustedReview,
+        totalRelevant,
+        totalMentions,
+        negativeEvidence.length,
+        positiveEvidence.length,
+        topNegative,
+        blockedSources.length,
+        actionFeedCount,
+        branchRows,
+      ),
     },
     screens: {
       overview: {
@@ -94,59 +110,107 @@ function buildListenHeadline(topRisk, strongestSocial, totalRelevant, negativeEv
   return `Dotn Listen hiện đang đọc ${totalRelevant} tín hiệu đủ sạch; ${socialPlatform} đang nuôi demand tốt nhất, còn ${branchName} và ${negativeEvidenceCount} negative evidence là hai vùng cần khóa hành động trước khi amplify proof.`;
 }
 
-function buildTopCards(topRisk, strongestSocial, trustedReview, totalRelevant, negativeEvidenceCount, topNegative) {
+function buildTopCards(
+  topRisk,
+  strongestSocial,
+  trustedReview,
+  totalRelevant,
+  totalMentions,
+  negativeEvidenceCount,
+  positiveEvidenceCount,
+  topNegative,
+  blockedSourceCount,
+  actionFeedCount,
+  branchRows,
+) {
+  const socialRows = [strongestSocial].filter((row) => row && row.platform);
+  const socialVolume = socialRows.reduce((sum, row) => sum + Number(row.relevant_count || 0), 0);
+  const qualifiedRatio = totalMentions ? Math.round((totalRelevant / totalMentions) * 100) : 0;
+  const branchTotal = branchRows.length;
+  const ratedBranchCount = branchRows.filter((row) => Number(row.avg_rating || 0) > 0 || Number(row.review_count || 0) > 0).length;
+  const reviewTrustCount = branchRows.reduce((sum, row) => sum + Number(row.review_count || 0), 0);
+  const trustCoverageRatio = branchTotal ? ratedBranchCount / branchTotal : 0;
   return [
     {
-      tag: 'RISK BRANCH',
-      title: topRisk.branch_name || 'No critical branch',
-      value: String(topRisk.risk_score || 0),
-      desc: topRisk.watchout || 'Chưa có branch nào vượt ngưỡng theo dõi mạnh.',
+      tag: 'RỦI RO DANH TIẾNG',
+      title: `${topRisk.branch_name || 'Chi nhánh'} cần theo dõi`,
+      value: Number(topRisk.risk_score || 0) >= 30 ? 'Cao' : 'Vừa',
+      desc: `Rating ${topRisk.avg_rating || 0} và ${topRisk.negative_count || 0} tín hiệu tiêu cực đang kéo risk lên.`,
       severity: severityFromRisk(topRisk.risk_level),
-      owner: 'Ops / CX',
-      guardrail: 'Fix branch pain before traffic amplification',
+      owner: 'Vận hành',
+      guardrail: 'Ưu tiên sửa trước',
       evidence_query: 'Branch Risk Snapshot',
-      evidence_kind: 'branch_risk',
+      evidence_kind: 'branch_negative',
       evidence_branch: topRisk.branch_name || '',
       evidence_platform: '',
     },
     {
-      tag: 'SOCIAL ENGINE',
-      title: titleCasePreserve(strongestSocial.platform || 'social'),
-      value: String(strongestSocial.relevant_count || 0),
-      desc: `${strongestSocial.platform || 'social'} đang kéo relevant volume mạnh nhất cho phase discovery.`,
-      severity: 'low',
-      owner: 'Marketing',
-      guardrail: 'Scale only when relevance stays clean',
+      tag: 'CLEANUP NGUỒN',
+      title: 'Dọn nhiễu trước khi scale insight',
+      value: blockedSourceCount >= 2 ? 'Cao' : (blockedSourceCount === 1 ? 'Vừa' : 'Ổn'),
+      desc: `${blockedSourceCount} nguồn còn noisy hoặc thiếu review depth, chưa nên dùng để kết luận mạnh.`,
+      severity: blockedSourceCount ? 'high' : 'low',
+      owner: 'Listening',
+      guardrail: 'Theo dõi trước',
       evidence_query: 'Channel Signal Quality',
-      evidence_kind: 'social_volume',
+      evidence_kind: 'source_cleanup',
+    },
+    {
+      tag: 'CƠ HỘI TĂNG TRƯỞNG',
+      title: `Social volume đang kéo bởi ${titleCasePreserve(strongestSocial.platform || 'social')}`,
+      value: socialVolume >= 100 ? 'Sẵn sàng' : 'Theo dõi',
+      desc: `${socialVolume} tín hiệu social liên quan đang đủ để đọc demand/theme rõ hơn.`,
+      severity: socialVolume ? 'medium' : 'low',
+      owner: 'Marketing',
+      guardrail: 'Sẵn sàng chạy campaign',
+      evidence_query: 'Channel Signal Quality',
+      evidence_kind: 'growth_platform',
       evidence_branch: '',
       evidence_platform: strongestSocial.platform || '',
     },
     {
-      tag: 'TRUST SOURCE',
-      title: titleCasePreserve(trustedReview.platform || 'reviews'),
-      value: String(trustedReview.review_count || 0),
-      desc: `${trustedReview.platform || 'review source'} hiện là nguồn proof đáng tin nhất cho rating/review pressure.`,
-      severity: Number(trustedReview.review_count || 0) > 0 ? 'low' : 'medium',
-      owner: 'Listening',
-      guardrail: 'Weight review-trust sources higher than vanity volume',
-      evidence_query: 'Channel Signal Quality',
-      evidence_kind: 'review_trust',
-      evidence_branch: '',
-      evidence_platform: trustedReview.platform || '',
+      tag: 'BẰNG CHỨNG TÍCH CỰC',
+      title: 'Proof bank bắt đầu dùng được',
+      value: positiveEvidenceCount >= 3 ? 'Mạnh' : 'Mỏng',
+      desc: `${positiveEvidenceCount} quote tích cực có thể đưa vào social proof hoặc recovery narrative.`,
+      severity: 'low',
+      owner: 'Marketing',
+      guardrail: 'An toàn để khuếch đại',
+      evidence_query: 'Social Proof Pipeline',
+      evidence_kind: 'positive_proof',
     },
     {
-      tag: 'NEGATIVE PROOF',
-      title: topNegative.metric_label || 'Negative evidence',
-      value: String(negativeEvidenceCount),
-      desc: topNegative.evidence_quote || `${negativeEvidenceCount} quote tiêu cực đang kéo pressure ở dashboard hiện tại.`,
-      severity: negativeEvidenceCount > 0 ? 'high' : 'low',
-      owner: 'CX',
-      guardrail: 'Respond fast to visible negative proof',
-      evidence_query: 'Lost Customer Signals',
-      evidence_kind: 'negative_evidence',
-      evidence_branch: topNegative.metric_label || '',
-      evidence_platform: topNegative.platform || '',
+      tag: 'QUALIFIED SIGNAL',
+      title: 'Tín hiệu F&B đã qua relevance',
+      value: `${qualifiedRatio}%`,
+      desc: `${totalRelevant}/${totalMentions || totalRelevant} record đang đủ chuẩn để đọc insight thay vì vanity volume.`,
+      severity: qualifiedRatio >= 70 ? 'low' : 'medium',
+      owner: 'Strategy',
+      guardrail: 'Đọc insight trên signal sạch',
+      evidence_query: 'Qualified Signal Summary',
+      evidence_kind: 'qualified_signal',
+    },
+    {
+      tag: 'ACTION FEED',
+      title: 'Queue xử lý đã có owner',
+      value: String(actionFeedCount),
+      desc: `${negativeEvidenceCount} negative evidence và ${actionFeedCount} dòng hành động đã sẵn để mở task thật.`,
+      severity: actionFeedCount ? 'medium' : 'low',
+      owner: 'Ops + CS',
+      guardrail: 'Mở case theo evidence',
+      evidence_query: 'Priority Action Detail',
+      evidence_kind: 'action_queue',
+    },
+    {
+      tag: 'REVIEW TRUST',
+      title: 'Review trust đã phủ chi nhánh',
+      value: `${ratedBranchCount}/${branchTotal || 0}`,
+      desc: `${reviewTrustCount} review trust đang nối được với ${ratedBranchCount}/${branchTotal || 0} chi nhánh để đối chiếu branch risk.`,
+      severity: trustCoverageRatio >= 0.75 ? 'low' : (trustCoverageRatio > 0 ? 'medium' : 'high'),
+      owner: 'CX + Ops',
+      guardrail: 'Bổ sung review depth',
+      evidence_query: 'Review Health Heatmap',
+      evidence_kind: '',
     },
   ];
 }
