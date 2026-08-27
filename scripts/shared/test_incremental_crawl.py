@@ -21,7 +21,15 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _project_root() -> Path:
+    current = Path(__file__).resolve().parent
+    for cand in [current, *current.parents]:
+        if (cand / "src" / "social_listening").is_dir():
+            return cand
+    raise RuntimeError(f"Cannot find project root from {__file__}")
+
+
+PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.crawl_state import IncrementalCrawlState
@@ -30,34 +38,34 @@ from social_listening.crawl_state import IncrementalCrawlState
 # Platform configurations
 PLATFORMS = {
     "threads": {
-        "search_runner": "scripts/threads/threads_crawl_runner.py",
-        "detail_runner": "scripts/threads/threads_replies_runner.py",
+        "search_runner": "scripts/marketing/crawl/threads/threads_crawl_runner.py",
+        "detail_runner": "scripts/marketing/crawl/threads/threads_replies_runner.py",
         "expected_speedup": 5.0,  # Expected speedup for incremental run
         "supports_early_stop": True,
     },
     "instagram": {
-        "search_runner": "scripts/instagram/instagram_search_runner.py",
-        "detail_runner": "scripts/instagram/instagram_post_runner.py",
+        "search_runner": "scripts/marketing/crawl/instagram/instagram_search_runner.py",
+        "detail_runner": "scripts/marketing/crawl/instagram/instagram_post_runner.py",
         "expected_speedup": 4.0,
         "supports_early_stop": True,
     },
     "facebook": {
-        "search_runner": "scripts/facebook/facebook_raw_runner.py",
+        "search_runner": "scripts/marketing/crawl/facebook/facebook_raw_runner.py",
         "detail_runner": None,  # Combined in one runner
         "expected_speedup": 2.0,  # Lower because search can't early-stop
         "supports_early_stop": False,
     },
     # Future platforms
     "tiktok": {
-        "search_runner": "scripts/tiktok/tiktok_search_runner.py",
-        "detail_runner": "scripts/tiktok/tiktok_video_runner.py",
+        "search_runner": "scripts/marketing/crawl/tiktok/tiktok_search_runner.py",
+        "detail_runner": "scripts/marketing/crawl/tiktok/tiktok_video_runner.py",
         "expected_speedup": 5.0,
         "supports_early_stop": True,
         "implemented": False,
     },
     "youtube": {
-        "search_runner": "scripts/youtube/youtube_search_runner.py",
-        "detail_runner": "scripts/youtube/youtube_video_runner.py",
+        "search_runner": "scripts/marketing/crawl/youtube/youtube_search_runner.py",
+        "detail_runner": "scripts/marketing/crawl/youtube/youtube_video_runner.py",
         "expected_speedup": 4.5,
         "supports_early_stop": True,
         "implemented": False,

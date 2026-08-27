@@ -9,7 +9,12 @@ from social_listening.paths import DATA_DIR
 
 
 def film_slug() -> str:
+    """Folder slug for raw/processed — ưu tiên field slug trong keyword JSON (khớp catalog)."""
     payload = load_keyword_payload()
+    explicit = str(payload.get("film_slug") or payload.get("slug") or "").strip()
+    if explicit:
+        return re.sub(r"[^a-zA-Z0-9]+", "_", explicit.lower()).strip("_") or explicit.lower()
+
     title = str(payload.get("film_title") or "").strip() or "default_film"
     normalized = unicodedata.normalize("NFD", title)
     ascii_only = normalized.encode("ascii", "ignore").decode("ascii")

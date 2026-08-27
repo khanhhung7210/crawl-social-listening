@@ -6,7 +6,15 @@ import shutil
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _project_root() -> Path:
+    current = Path(__file__).resolve().parent
+    for cand in [current, *current.parents]:
+        if (cand / "src" / "social_listening").is_dir():
+            return cand
+    raise RuntimeError(f"Cannot find project root from {__file__}")
+
+
+PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload

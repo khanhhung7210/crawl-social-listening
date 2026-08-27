@@ -71,7 +71,7 @@ try {
         Start-Sleep -Seconds 10
     }
 
-    $platforms = @("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps", "shopeefood", "grabfood")
+    $platforms = @("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps")
     $jobs = @()
 
     foreach ($platform in $platforms) {

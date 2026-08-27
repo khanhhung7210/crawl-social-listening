@@ -1,34 +1,16 @@
 # Social Listening Scripts
 
-Repo này hiện là bộ script ad-hoc để crawl và lọc dữ liệu social listening, đã được dọn lại theo cấu trúc gọn hơn:
+Crawl + process social listening cho **Galaxy Cinema** (MXH + Maps). Schema MKT mới: `sql/galaxy_mkt_schema.sql` (DB `galaxy_social_listening`, schema `galaxy_sl`).
 
 ```text
 social-listening/
-├── data/
-│   ├── facebook/
-│   │   ├── raw/
-│   │   └── processed/
-│   ├── threads/
-│   │   ├── raw/
-│   │   └── processed/
-│   ├── tiktok/
-│   │   ├── raw/
-│   │   └── processed/
-│   ├── youtube/
-│   │   ├── raw/
-│   │   └── processed/
-│   ├── instagram/
-│   │   ├── raw/
-│   │   └── processed/
-│   └── archive/
-├── reports/
+├── data/             # raw/processed theo platform (không đổi)
 ├── scripts/
-│   ├── facebook/
-│   ├── threads/
-│   ├── tiktok/
-│   ├── youtube/
-│   └── instagram/
-└── src/social_listening/
+│   ├── marketing/    # crawl MXH + news/reviews + classify/metrics brand
+│   ├── distribution/ # crawl phim + classify/metrics film
+│   └── shared/       # import DB, purge, setup Postgres
+├── sql/galaxy_mkt_schema.sql
+├── src/social_listening/
 ```
 
 ## Cài đặt
@@ -41,12 +23,14 @@ pip install -r requirements.txt
 
 ## Quy ước thư mục
 
-- `scripts/`: runner/job để crawl, parse, filter.
+- `scripts/marketing/`: crawl brand (platform → keyword), classify, metrics.
+- `scripts/distribution/`: crawl phim, classify intent/region, film metrics.
+- `scripts/shared/`: import Postgres, purge, setup.
 - `src/social_listening/`: helper dùng chung như path và text normalization.
 - `data/*/raw/`: dữ liệu crawl thô.
 - `data/*/processed/`: dữ liệu đã parse/lọc.
-- `data/archive/`: file mẫu hoặc output cũ được giữ lại để tham chiếu.
 - `reports/`: file Excel báo cáo.
+- `sql/galaxy_mkt_schema.sql`: Postgres schema brand health MKT (Galaxy vs CGV/Lotte/Beta).
 
 ## Shared Keyword Config
 
@@ -101,12 +85,11 @@ Keyword config dùng chung:
 - `data/shared/social_keywords.json`
 
 ```bash
-python3 scripts/threads/threads_crawl_runner.py
-python3 scripts/threads/threads_search_filter_job.py
-python3 scripts/threads/threads_replies_runner.py
-python3 scripts/threads/threads_format_job.py
-python3 scripts/threads/threads_keyword_filter_job.py
-python3 scripts/threads/threads_mongodb_sync.py
+python3 scripts/marketing/crawl/threads/threads_crawl_runner.py
+python3 scripts/marketing/crawl/threads/threads_search_filter_job.py
+python3 scripts/marketing/crawl/threads/threads_replies_runner.py
+python3 scripts/marketing/crawl/threads/threads_format_job.py
+python3 scripts/marketing/crawl/threads/threads_keyword_filter_job.py
 ```
 
 Output mặc định:
@@ -131,12 +114,11 @@ Mở Chrome với remote debugging trước:
 Sau đó chạy:
 
 ```bash
-python3 scripts/tiktok/tiktok_search_runner.py
-python3 scripts/tiktok/tiktok_search_filter_job.py
-python3 scripts/tiktok/tiktok_video_runner.py
-python3 scripts/tiktok/tiktok_format_job.py
-python3 scripts/tiktok/tiktok_keyword_filter_job.py
-python3 scripts/tiktok/tiktok_mongodb_sync.py
+python3 scripts/marketing/crawl/tiktok/tiktok_search_runner.py
+python3 scripts/marketing/crawl/tiktok/tiktok_search_filter_job.py
+python3 scripts/marketing/crawl/tiktok/tiktok_video_runner.py
+python3 scripts/marketing/crawl/tiktok/tiktok_format_job.py
+python3 scripts/marketing/crawl/tiktok/tiktok_keyword_filter_job.py
 ```
 
 Output mặc định:
@@ -161,9 +143,9 @@ Mở Chrome với remote debugging và dùng profile đã login Facebook:
 Sau đó chạy:
 
 ```bash
-python3 scripts/facebook/facebook_raw_runner.py
-python3 scripts/facebook/facebook_keyword_filter_job.py
-python3 scripts/facebook/facebook_mongodb_sync.py
+python3 scripts/marketing/crawl/facebook/facebook_raw_runner.py
+python3 scripts/marketing/crawl/facebook/facebook_keyword_filter_job.py
+python3 scripts/marketing/crawl/facebook/facebook_format_job.py
 ```
 
 Keyword config:
@@ -192,14 +174,11 @@ Mở Chrome với remote debugging:
 ```
 
 ```bash
-python3 scripts/youtube/youtube_search_runner.py
-python3 scripts/youtube/youtube_search_filter_job.py
-python3 scripts/youtube/youtube_video_runner.py
-python3 scripts/youtube/youtube_format_job.py
-python3 scripts/youtube/youtube_keyword_filter_job.py
-python3 scripts/youtube/youtube_mongodb_sync.py
-# hoặc
-MONGO_URI='mongodb://user:pass@localhost:27017/?authSource=admin' python3 scripts/youtube/youtube_mongodb_sync.py
+python3 scripts/marketing/crawl/youtube/youtube_search_runner.py
+python3 scripts/marketing/crawl/youtube/youtube_search_filter_job.py
+python3 scripts/marketing/crawl/youtube/youtube_video_runner.py
+python3 scripts/marketing/crawl/youtube/youtube_format_job.py
+python3 scripts/marketing/crawl/youtube/youtube_keyword_filter_job.py
 ```
 
 Output mặc định:
@@ -217,7 +196,6 @@ Lưu ý:
 - YouTube script không cần login hay remote debugging để chạy cơ bản.
 - YouTube hiện có thể attach vào Chrome debug riêng ở port `9225` để chạy song song với các platform khác.
 - `created_at` của comment ưu tiên thời gian thật nếu trang có dữ liệu đầy đủ; nếu chỉ có label tương đối như `4 days ago` thì sẽ quy đổi xấp xỉ theo thời điểm crawl.
-- Script MongoDB mặc định sync vào `CRM.tblSocial` trên `192.168.0.223` với user `galaxy`; có thể override bằng `MONGO_URI` hoặc các biến `MONGO_HOST`, `MONGO_PORT`, `MONGO_DB`, `MONGO_COLLECTION`, `MONGO_USER`, `MONGO_PASSWORD`, `MONGO_AUTH_SOURCE`, `FILM_TITLE`.
 
 ## Chạy Instagram
 
@@ -232,11 +210,10 @@ Mở Chrome với remote debugging và dùng profile đã login Instagram:
 Sau đó chạy:
 
 ```bash
-python3 scripts/instagram/instagram_search_runner.py
-python3 scripts/instagram/instagram_post_runner.py
-python3 scripts/instagram/instagram_format_job.py
-python3 scripts/instagram/instagram_keyword_filter_job.py
-python3 scripts/instagram/instagram_mongodb_sync.py
+python3 scripts/marketing/crawl/instagram/instagram_search_runner.py
+python3 scripts/marketing/crawl/instagram/instagram_post_runner.py
+python3 scripts/marketing/crawl/instagram/instagram_format_job.py
+python3 scripts/marketing/crawl/instagram/instagram_keyword_filter_job.py
 ```
 
 Output mặc định:
@@ -251,50 +228,53 @@ Lưu ý:
 - Instagram hiện nên chạy với session đã login, nếu không search và comments rất dễ bị hạn chế.
 - `created_at` của comment ưu tiên thời gian thật nếu trang có dữ liệu nhúng; nếu chỉ có label tương đối thì sẽ quy đổi xấp xỉ theo thời điểm crawl.
 
-## Sync MongoDB
+## Sync PostgreSQL
 
-Mỗi platform hiện có script sync riêng:
-
-```bash
-python3 scripts/facebook/facebook_mongodb_sync.py
-python3 scripts/threads/threads_mongodb_sync.py
-python3 scripts/tiktok/tiktok_mongodb_sync.py
-python3 scripts/youtube/youtube_mongodb_sync.py
-python3 scripts/instagram/instagram_mongodb_sync.py
-```
-
-Các script này mặc định sync vào `CRM.tblSocial`, và đều hỗ trợ:
-
-- `MONGO_URI`
-- `MONGO_HOST`
-- `MONGO_PORT`
-- `MONGO_DB`
-- `MONGO_COLLECTION`
-- `MONGO_USER`
-- `MONGO_PASSWORD`
-- `MONGO_AUTH_SOURCE`
-- `MONGO_APP_NAME`
-- `FILM_TITLE`
-- `INPUT_FILE`
-
-## Chạy Dashboard Report
-
-Dashboard web mới nằm ngay trong repo và đọc trực tiếp từ Mongo `CRM.tblSocial` + `CRM.tblSentiment`.
-
-Chạy local:
+Crawl → `data/*/processed/*_keyword_mentions.json` → Postgres DB `galaxy_social_listening` / schema `galaxy_sl`.
 
 ```bash
-export MONGO_HOST=192.168.0.223
-export MONGO_PORT=27017
-export MONGO_DB=CRM
-export MONGO_USER=galaxy
-export MONGO_PASSWORD='<PwaVsk31Lro'
-python3 scripts/dashboard/dashboard_server.py
+# one-time local PG (Homebrew, no Docker)
+./scripts/shared/setup_local_pg.sh
+
+# App Review sample
+PYTHONPATH=src python3 scripts/marketing/crawl/reviews/crawl_app_reviews.py
+PYTHONPATH=src python3 scripts/shared/import_app_reviews.py --input data/app-reviews/live.json
+
+# MXH keyword mentions (sau khi crawl)
+PYTHONPATH=src python3 scripts/shared/import_keyword_mentions.py
+PYTHONPATH=src python3 scripts/marketing/metrics/recompute_daily_brand_metrics.py
+
+# Campaign Tracking (seed + match keyword → mention_campaigns + metrics + media_type)
+# import_keyword_mentions.py cũng gọi build_campaign_tracking tự động nếu DB sẵn.
+PYTHONPATH=src python3 scripts/marketing/classify/build_campaign_tracking.py
+PYTHONPATH=src python3 scripts/marketing/classify/classify_mention_topics.py --brand glx
+
+# Brand Health nhanh (không cần Chrome) — Google News RSS
+PYTHONPATH=src python3 scripts/marketing/crawl/news/crawl_news_mentions.py --days 30
+PYTHONPATH=src python3 scripts/shared/import_keyword_mentions.py --file data/news/processed/galaxy_cinema/news_keyword_mentions.json
+
+# GBO Share (báo cáo nội bộ CSV → gbo_snapshots)
+PYTHONPATH=src python3 scripts/shared/import_gbo_share.py
+# hoặc: --input path/to/gbo_share.csv
+# CSV: period_start,period_end,brand_slug,gbo_share_pct,cinema_count,source_name
 ```
 
-Mặc định web sẽ lên ở:
+Pipeline `./run-pipeline.sh <platform>` đã gọi `import_keyword_mentions.py` ở bước sync.
 
-- `http://127.0.0.1:8787`
+Dashboard MKT: repo `galaxy-dashboard-social` → `/marketing` (API `/api/mkt/brand-health`, `/api/mkt/campaigns`, `/api/mkt/app-reviews`). Không có data thì API/UI trả trống hoặc lỗi — không seed demo UI.
+
+Campaign keywords/hashtags (`#GalaxySummer`, `#GalaxyRewards`, `#GalaxyIMAX`, …) đã thêm vào `data/shared/social_keywords.json` để crawl daily bắt được buzz campaign.
+
+## Dashboard UI
+
+UI nằm ở repo `galaxy-dashboard-social` (Next.js). Schema Postgres MKT: `sql/galaxy_mkt_schema.sql`.
+
+Áp schema:
+
+```bash
+createdb galaxy_social_listening   # hoặc: CREATE DATABASE galaxy_social_listening;
+psql -h localhost -U <user> -d galaxy_social_listening -f sql/galaxy_mkt_schema.sql
+```
 
 ## Chạy Tự Động Trên Windows Server
 
@@ -316,7 +296,7 @@ Script Windows đã thêm:
 - set đúng 5 biến `*_DEBUGGER_ADDRESS`
 - giữ lock file để tránh chạy đè job cũ
 - launch 5 pipeline song song
-- mỗi platform tự chạy tuần tự các bước crawl/filter/format/sync của chính nó
+- mỗi platform tự chạy tuần tự các bước crawl/filter/format của chính nó
 - ghi log riêng theo từng platform vào `logs/windows-runs/<timestamp>/`
 
 Ví dụ chạy tay trên Windows:
@@ -361,27 +341,8 @@ Lưu ý thực tế trên Windows server:
 
 Biến môi trường hỗ trợ:
 
-- `DASHBOARD_HOST`
-- `DASHBOARD_PORT`
-- `MONGO_URI`
-- `MONGO_HOST`
-- `MONGO_PORT`
-- `MONGO_DB`
-- `MONGO_USER`
-- `MONGO_PASSWORD`
-- `MONGO_AUTH_SOURCE`
-
-Dashboard hiện có:
-
-- metric cards: total buzz, posts, comments, positive ratio, negative ratio
-- social media type breakdown
-- platform share breakdown
-- top source by mentions
-- platform sentiment table từ `tblSentiment`
-- sentiment donut
-- real feedbacks by topic từ `tblSocial.comments_`
-- sample positive/negative comments
-- methodology blocks giống format report
+- `PGHOST` / `PGPORT` / `PGDATABASE` / `PGSCHEMA` / `PGUSER` / `PGPASSWORD`
+- `SOCIAL_KEYWORDS_FILE` (optional override keyword JSON)
 
 Test:
 

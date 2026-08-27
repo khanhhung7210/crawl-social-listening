@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps", "shopeefood", "grabfood", "grabfood_web")]
+    [ValidateSet("threads", "tiktok", "youtube", "instagram", "facebook", "google_maps")]
     [string]$Platform,
 
     [Parameter(Mandatory = $true)]
@@ -34,65 +34,42 @@ function Invoke-Step {
 
 $stepsByPlatform = @{
     "threads" = @(
-        "scripts/threads/threads_crawl_runner.py",
-        "scripts/threads/threads_search_filter_job.py",
-        "scripts/threads/threads_replies_runner.py",
-        "scripts/threads/threads_format_job.py",
-        "scripts/threads/threads_keyword_filter_job.py",
-        "scripts/threads/threads_mongodb_sync.py"
+        "scripts/marketing/crawl/threads/threads_crawl_runner.py",
+        "scripts/marketing/crawl/threads/threads_search_filter_job.py",
+        "scripts/marketing/crawl/threads/threads_replies_runner.py",
+        "scripts/marketing/crawl/threads/threads_format_job.py",
+        "scripts/marketing/crawl/threads/threads_keyword_filter_job.py"
     )
     "tiktok" = @(
-        "scripts/tiktok/tiktok_search_runner.py",
-        "scripts/tiktok/tiktok_search_filter_job.py",
-        "scripts/tiktok/tiktok_video_runner.py",
-        "scripts/tiktok/tiktok_format_job.py",
-        "scripts/tiktok/tiktok_keyword_filter_job.py",
-        "scripts/tiktok/tiktok_mongodb_sync.py"
+        "scripts/marketing/crawl/tiktok/tiktok_search_runner.py",
+        "scripts/marketing/crawl/tiktok/tiktok_search_filter_job.py",
+        "scripts/marketing/crawl/tiktok/tiktok_video_runner.py",
+        "scripts/marketing/crawl/tiktok/tiktok_format_job.py",
+        "scripts/marketing/crawl/tiktok/tiktok_keyword_filter_job.py"
     )
     "youtube" = @(
-        "scripts/youtube/youtube_search_runner.py",
-        "scripts/youtube/youtube_search_filter_job.py",
-        "scripts/youtube/youtube_video_runner.py",
-        "scripts/youtube/youtube_format_job.py",
-        "scripts/youtube/youtube_keyword_filter_job.py",
-        "scripts/youtube/youtube_mongodb_sync.py"
+        "scripts/marketing/crawl/youtube/youtube_search_runner.py",
+        "scripts/marketing/crawl/youtube/youtube_search_filter_job.py",
+        "scripts/marketing/crawl/youtube/youtube_video_runner.py",
+        "scripts/marketing/crawl/youtube/youtube_format_job.py",
+        "scripts/marketing/crawl/youtube/youtube_keyword_filter_job.py"
     )
     "instagram" = @(
-        "scripts/instagram/instagram_search_runner.py",
-        "scripts/instagram/instagram_post_runner.py",
-        "scripts/instagram/instagram_format_job.py",
-        "scripts/instagram/instagram_keyword_filter_job.py",
-        "scripts/instagram/instagram_mongodb_sync.py"
+        "scripts/marketing/crawl/instagram/instagram_search_runner.py",
+        "scripts/marketing/crawl/instagram/instagram_post_runner.py",
+        "scripts/marketing/crawl/instagram/instagram_format_job.py",
+        "scripts/marketing/crawl/instagram/instagram_keyword_filter_job.py"
     )
     "facebook" = @(
-        "scripts/facebook/facebook_raw_runner.py",
-        "scripts/facebook/facebook_keyword_filter_job.py",
-        "scripts/facebook/facebook_format_job.py",
-        "scripts/facebook/facebook_mongodb_sync.py"
+        "scripts/marketing/crawl/facebook/facebook_raw_runner.py",
+        "scripts/marketing/crawl/facebook/facebook_keyword_filter_job.py",
+        "scripts/marketing/crawl/facebook/facebook_format_job.py"
     )
     "google_maps" = @(
-        "scripts/google_maps/google_maps_search_runner.py",
-        "scripts/google_maps/google_maps_review_runner.py",
-        "scripts/google_maps/google_maps_format_job.py",
-        "scripts/google_maps/google_maps_keyword_filter_job.py",
-        "scripts/google_maps/google_maps_mongodb_sync.py"
-    )
-    "shopeefood" = @(
-        "scripts/shopeefood/shopeefood_simulator_full_runner.py",
-        "scripts/shopeefood/shopeefood_format_job.py",
-        "scripts/shopeefood/shopeefood_keyword_filter_job.py",
-        "scripts/shopeefood/shopeefood_mongodb_sync.py"
-    )
-    "grabfood" = @(
-        "scripts/grabfood/grabfood_app_explore_reviews.py"
-    )
-    "grabfood_web" = @(
-        "scripts/grabfood/grabfood_search_runner.py",
-        "scripts/grabfood/grabfood_search_filter.py",
-        "scripts/grabfood/grabfood_detail_runner.py",
-        "scripts/grabfood/grabfood_format_job.py",
-        "scripts/grabfood/grabfood_keyword_filter_job.py",
-        "scripts/grabfood/grabfood_mongodb_sync.py"
+        "scripts/marketing/crawl/reviews/google_maps/google_maps_search_runner.py",
+        "scripts/marketing/crawl/reviews/google_maps/google_maps_review_runner.py",
+        "scripts/marketing/crawl/reviews/google_maps/google_maps_format_job.py",
+        "scripts/marketing/crawl/reviews/google_maps/google_maps_keyword_filter_job.py"
     )
 }
 

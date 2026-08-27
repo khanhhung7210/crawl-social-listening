@@ -1,7 +1,10 @@
 beautifulsoup4>=4.12.0
-pymongo>=4.10.0
 requests>=2.32.0
 python-dateutil>=2.9.0
 python-dotenv>=1.0.1
+openpyxl>=3.1.0
 selenium>=4.24.0
 webdriver-manager>=4.0.2
+psycopg2-binary>=2.9.9
+google-play-scraper>=1.2.7
+tzdata>=2024.1
