@@ -530,7 +530,7 @@ def main() -> int:
         try:
             from importlib.util import module_from_spec, spec_from_file_location
 
-            metrics_path = Path(__file__).with_name("recompute_daily_film_metrics.py")
+            metrics_path = Path(__file__).resolve().parent / "metrics" / "recompute_daily_film_metrics.py"
             spec = spec_from_file_location("recompute_daily_film_metrics", metrics_path)
             if spec and spec.loader:
                 mod = module_from_spec(spec)

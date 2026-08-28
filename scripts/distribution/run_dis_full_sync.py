@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,10 +29,19 @@ def _dis_script(name: str) -> Path:
     raise FileNotFoundError(f"Missing distribution script: {name}")
 
 
+def env_python() -> dict[str, str]:
+    return {
+        **os.environ,
+        "PYTHONPATH": str(PROJECT_ROOT / "src"),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
 def run(script: str, *args: str) -> None:
     cmd = [sys.executable, str(_dis_script(script)), *args]
     print(f"\n>>> {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=str(PROJECT_ROOT), check=True, env={**dict(__import__('os').environ), "PYTHONPATH": str(PROJECT_ROOT / "src")})
+    subprocess.run(cmd, cwd=str(PROJECT_ROOT), check=True, env=env_python())
 
 
 def main() -> int:

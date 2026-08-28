@@ -24,7 +24,8 @@ def resolve_chromedriver_path() -> str:
     env = (os.getenv("CHROMEDRIVER_PATH") or "").strip()
     if env and Path(env).is_file():
         return env
-    if _RUNTIME_DRIVER.is_file():
+    # Skip bundled runtime driver on Windows — often stale vs installed Chrome.
+    if os.name != "nt" and _RUNTIME_DRIVER.is_file():
         return str(_RUNTIME_DRIVER)
 
     roots = [
@@ -128,16 +129,29 @@ def build_attached_chrome(address: str | None = None) -> webdriver.Chrome:
     """Selenium attach. Uses Selenium Manager (matches installed Chrome), not stale runtime driver."""
     addr = address or debugger_address()
     ensure_debug_chrome(addr)
+    return build_debugger_chrome(addr)
+
+
+def build_debugger_chrome(address: str) -> webdriver.Chrome:
+    """Attach to Chrome already listening on a remote-debugging port."""
+    addr = address.strip()
+    if not addr:
+        raise ValueError("debugger address is required")
     options = Options()
     options.debugger_address = addr
     try:
-        # Do not pass Service(old runtime chromedriver) — Chrome 151 needs a matching driver.
+        # Selenium Manager picks a chromedriver matching installed Chrome (e.g. 151).
         return webdriver.Chrome(options=options)
     except SessionNotCreatedException as exc:
         raise RuntimeError(
-            f"Không attach được Chrome tại {addr}. "
-            "Đóng hết Chrome debug cũ rồi chạy lại crawler (script sẽ tự mở Chrome)."
+            f"Cannot attach Selenium to Chrome at {addr}. "
+            f"Check: curl http://{addr}/json/version — "
+            "Chrome must be open with --remote-debugging-port."
         ) from exc
+
+
+# Back-compat alias used by some crawlers
+build_debugger_driver = build_debugger_chrome
 
 
 def leave_chrome_open(driver: webdriver.Chrome | None) -> None:

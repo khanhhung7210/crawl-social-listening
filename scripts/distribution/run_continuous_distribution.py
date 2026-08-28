@@ -50,6 +50,7 @@ def env_python(platform: str | None = None) -> dict[str, str]:
         "PYTHONPATH": str(PROJECT_ROOT / "src"),
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
+        "SOCIAL_CONFIG_SOURCE": os.getenv("SOCIAL_CONFIG_SOURCE", "db"),
     }
     # Always set all DIS ports; runners pick their own env key
     env.setdefault("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9232")
@@ -95,6 +96,7 @@ def main() -> int:
     parser.add_argument("--no-import-db", action="store_true")
     parser.add_argument("--max-rounds", type=int, default=0)
     parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--skip-seed", action="store_true", help="Skip seed_films each round")
     args = parser.parse_args()
 
     if not args.film and not args.all_active:
@@ -138,6 +140,8 @@ def main() -> int:
                 cmd.append("--import-db")
             else:
                 cmd.append("--no-import-db")
+            if args.skip_seed:
+                cmd.append("--skip-seed")
 
             import subprocess
 
@@ -150,16 +154,29 @@ def main() -> int:
 
             if do_import:
                 # Intent trên comment (WOM / khen-chê) + metrics lại sau classify
-                for script in (CLASSIFY, METRICS):
-                    code = subprocess.run(
-                        [sys.executable, str(script)],
-                        cwd=str(PROJECT_ROOT),
-                        env=env_python(args.platform),
-                    ).returncode
-                    log(f"  post-step {script.name} exit={code}")
+                classify_cmd = [sys.executable, str(CLASSIFY), "--reclassify"]
+                if args.film and not args.all_active:
+                    classify_cmd.extend(["--film-slug", args.film])
+                code = subprocess.run(
+                    classify_cmd,
+                    cwd=str(PROJECT_ROOT),
+                    env=env_python(args.platform),
+                ).returncode
+                log(f"  post-step classify_mention_intent.py exit={code}")
+                code = subprocess.run(
+                    [sys.executable, str(METRICS)],
+                    cwd=str(PROJECT_ROOT),
+                    env=env_python(args.platform),
+                ).returncode
+                log(f"  post-step recompute_daily_film_metrics.py exit={code}")
 
             if args.max_rounds and round_no >= args.max_rounds:
                 log(f"Reached --max-rounds={args.max_rounds}")
+                return 0
+
+            stop_file = LOCK_DIR / "stop-after-round"
+            if stop_file.exists():
+                log("Stop file detected — exit after this round")
                 return 0
 
             log(f"Sleep {args.sleep}s…")

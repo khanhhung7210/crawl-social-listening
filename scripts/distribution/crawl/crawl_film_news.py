@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -158,7 +159,19 @@ def crawl_film(film: dict, days: int) -> tuple[Path, int]:
     return out_path, len(merged)
 
 
+def _configure_stdio() -> None:
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def main() -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--film", default="", help="Film slug; default all active")
@@ -186,7 +199,12 @@ def main() -> int:
             subprocess.run(
                 [sys.executable, str(PROJECT_ROOT / "scripts/distribution/import_film_mentions.py"), "--film", slug],
                 cwd=str(PROJECT_ROOT),
-                env={**dict(os.environ), "PYTHONPATH": str(PROJECT_ROOT / "src")},
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(PROJECT_ROOT / "src"),
+                    "PYTHONUTF8": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                },
                 check=False,
             )
 
@@ -195,6 +213,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    import os
-
     raise SystemExit(main())

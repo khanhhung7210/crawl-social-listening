@@ -32,7 +32,7 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.chromedriver_utils import build_debugger_chrome
 
 DEBUGGER_ADDRESS = os.getenv("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9223")
 VIDEO_URL = ""
@@ -323,22 +323,7 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
 
 
 def build_driver() -> webdriver.Chrome:
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-
-    driver_path = resolve_chromedriver_path()
-    try:
-        if driver_path:
-            return webdriver.Chrome(service=Service(driver_path), options=options)
-        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except SessionNotCreatedException as exc:
-        raise RuntimeError(
-            "Cannot connect to Chrome remote debugging at "
-            f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-            "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-            "--remote-debugging-port=9223 "
-            "--user-data-dir=/tmp/chrome-codex-tiktok"
-        ) from exc
+    return build_debugger_chrome(DEBUGGER_ADDRESS)
 
 
 def normalize_tiktok_video_url(url: str) -> str:

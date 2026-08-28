@@ -31,7 +31,7 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.chromedriver_utils import build_debugger_driver
 
 
 TIKTOK_SEARCH_URL = "https://www.tiktok.com/search/video?q={query}"
@@ -222,21 +222,7 @@ def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
 
 
 def build_driver() -> webdriver.Chrome:
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-    driver_path = resolve_chromedriver_path()
-    try:
-        if driver_path:
-            return webdriver.Chrome(service=Service(driver_path), options=options)
-        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except SessionNotCreatedException as exc:
-        raise RuntimeError(
-            "Cannot connect to Chrome remote debugging at "
-            f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-            "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-            "--remote-debugging-port=9223 "
-            "--user-data-dir=/tmp/chrome-codex-tiktok"
-        ) from exc
+    return build_debugger_driver(DEBUGGER_ADDRESS)
 
 
 def scroll_search_results(driver: webdriver.Chrome) -> None:

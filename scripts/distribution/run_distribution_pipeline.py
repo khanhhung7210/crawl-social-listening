@@ -51,16 +51,16 @@ def log(msg: str) -> None:
 
 
 def env_base() -> dict[str, str]:
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
     env = {
         **os.environ,
         "PYTHONPATH": str(PROJECT_ROOT / "src"),
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
+        "SOCIAL_CONFIG_SOURCE": os.getenv("SOCIAL_CONFIG_SOURCE", "db"),
     }
-    # DIS chromedriver — không sửa runner MKT; set path qua env khi crawl DIS
-    dis_driver = PROJECT_ROOT / "runtime" / "bin" / "chromedriver"
-    if dis_driver.is_file():
-        env.setdefault("CHROMEDRIVER_PATH", str(dis_driver))
     # Distribution Chrome = MKT port + 10
     env.setdefault("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9232")
     env.setdefault("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9233")
