@@ -40,7 +40,9 @@ CINEMA_FILE = DATA_DIR / "shared" / "galaxy_cinemas.json"
 
 
 def load_galaxy_cinema_queries() -> list[str]:
-    if os.getenv("SOCIAL_CONFIG_SOURCE", "file").strip().lower() == "db":
+    from social_listening.keyword_config import uses_db_keyword_config
+
+    if uses_db_keyword_config():
         try:
             from social_listening.config.db_source import load_galaxy_cinema_queries_from_db
 

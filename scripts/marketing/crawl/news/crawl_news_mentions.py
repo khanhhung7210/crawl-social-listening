@@ -33,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload  # noqa: E402
 from social_listening.paths import DATA_DIR, ensure_dir  # noqa: E402
+from social_listening.vietnam_filter import is_vietnam_relevant  # noqa: E402
 
 QUERIES_EXTRA = [
     "Galaxy Cinema",
@@ -138,6 +139,7 @@ def main() -> int:
     merged: list[dict] = []
     fetch_ok = 0
     fetch_fail = 0
+    skipped_market = 0
     for term in terms:
         try:
             batch = fetch_rss(term, max(1, args.days))
@@ -150,6 +152,14 @@ def main() -> int:
         for row in batch:
             key = row["post_id"]
             if key in seen:
+                continue
+            if not is_vietnam_relevant(
+                row.get("post_text"),
+                permalink=row.get("post_url"),
+                author=row.get("page_name"),
+                platform="news",
+            ):
+                skipped_market += 1
                 continue
             seen.add(key)
             merged.append(row)
@@ -167,7 +177,7 @@ def main() -> int:
         return 1
 
     out_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {len(merged)} mentions → {out_path}")
+    print(f"Wrote {len(merged)} mentions → {out_path} (skipped_market={skipped_market})")
     return 0
 
 

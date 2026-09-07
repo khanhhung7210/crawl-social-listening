@@ -24,7 +24,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from social_listening.brand_rules import (  # noqa: E402
     detect_brands,
     detect_competitive_brands,
-    normalize,
 )
 from social_listening.pg import fetch_brand_map, get_connection  # noqa: E402
 from social_listening.paths import DATA_DIR  # noqa: E402
@@ -37,10 +36,8 @@ from social_listening.review_utils import (  # noqa: E402
     parse_relative_time_label,
 )
 from social_listening.text_utils import parse_compact_count  # noqa: E402
+from social_listening.marketing_sentiment import detect_sentiment  # noqa: E402
 from social_listening.vietnam_filter import is_vietnam_relevant  # noqa: E402
-
-POS_WORDS = ["ngon", "tốt", "tot", "hay", "đỉnh", "dinh", "ổn", "on", "thích", "thich", "ok", "xuất sắc"]
-NEG_WORDS = ["tệ", "te", "dở", "do", "xấu", "xau", "lỗi", "loi", "thất vọng", "that vong", "kém", "kem", "chán", "chan"]
 
 
 def raw_post_date_label(item: dict) -> str:
@@ -172,17 +169,6 @@ def resolve_item_occurred_at(item: dict) -> datetime | None:
     return None
 
 
-def detect_sentiment(text: str) -> str:
-    blob = normalize(text)
-    pos = sum(1 for w in POS_WORDS if w in blob)
-    neg = sum(1 for w in NEG_WORDS if w in blob)
-    if neg > pos:
-        return "negative"
-    if pos > neg:
-        return "positive"
-    return "neutral"
-
-
 def platform_ok(code: str, cur) -> bool:
     cur.execute("SELECT 1 FROM platforms WHERE platform_code = %s", (code,))
     return cur.fetchone() is not None
@@ -207,6 +193,17 @@ def find_mention_files(root: Path, film: str | None = None) -> list[Path]:
     return out
 
 
+def post_engagement_from_item(item: dict) -> dict[str, int | None]:
+    """Map crawler/formatter stats onto posts engagement columns."""
+    stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+    return {
+        "like_count": _int(stats.get("like_count") or stats.get("digg_count") or item.get("like_count")),
+        "comment_count": _int(stats.get("comment_count") or item.get("comment_count")),
+        "view_count": _int(stats.get("view_count") or stats.get("play_count") or item.get("view_count")),
+        "share_count": _int(stats.get("share_count") or item.get("share_count")),
+    }
+
+
 def upsert_post(cur, item: dict, platform: str) -> str:
     external_id = str(item.get("post_id") or item.get("id") or item.get("url") or "")
     if not external_id:
@@ -215,7 +212,7 @@ def upsert_post(cur, item: dict, platform: str) -> str:
     posted_at = resolve_item_occurred_at(item)
     url = item.get("post_url") or item.get("url") or ""
     author = item.get("page_name") or item.get("author") or item.get("author_name")
-    stats = item.get("stats") or {}
+    engagement = post_engagement_from_item(item)
     # posts.posted_at may be NOT NULL — utcnow is only a posts-row placeholder.
     # Mentions require a real publish time via resolve_post_occurred_at (no invent).
     posted_at_value = posted_at or datetime.utcnow()
@@ -223,9 +220,10 @@ def upsert_post(cur, item: dict, platform: str) -> str:
         """
         INSERT INTO posts (
             platform_code, external_post_id, author_key, author_name, post_text,
-            posted_at, post_url, like_count, comment_count, view_count, media_type, metadata
+            posted_at, post_url, like_count, comment_count, view_count, share_count,
+            media_type, metadata
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'earned', %s::jsonb
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'earned', %s::jsonb
         )
         ON CONFLICT (platform_code, external_post_id) DO UPDATE SET
             post_text = EXCLUDED.post_text,
@@ -234,6 +232,7 @@ def upsert_post(cur, item: dict, platform: str) -> str:
             like_count = COALESCE(EXCLUDED.like_count, posts.like_count),
             comment_count = COALESCE(EXCLUDED.comment_count, posts.comment_count),
             view_count = COALESCE(EXCLUDED.view_count, posts.view_count),
+            share_count = COALESCE(EXCLUDED.share_count, posts.share_count),
             updated_at = NOW()
         RETURNING post_id::text
         """,
@@ -245,9 +244,10 @@ def upsert_post(cur, item: dict, platform: str) -> str:
             text,
             posted_at_value,
             url,
-            _int(stats.get("like_count") or stats.get("digg_count")),
-            _int(stats.get("comment_count") or item.get("comment_count")),
-            _int(stats.get("view_count") or stats.get("play_count")),
+            engagement["like_count"],
+            engagement["comment_count"],
+            engagement["view_count"],
+            engagement["share_count"],
             json.dumps({"source": item.get("source")}, ensure_ascii=False),
             posted_at,  # do not overwrite good dates with utcnow fallback
         ),
@@ -266,7 +266,16 @@ def _int(value) -> int | None:
 
 
 def _link_brands(cur, mention_id: str, brands: list[str], brand_map: dict[str, str]) -> None:
+    """Replace brand assignments for one mention with the current detection result."""
+    cur.execute(
+        "DELETE FROM mention_brands WHERE mention_id = %s::uuid",
+        (mention_id,),
+    )
+    seen: set[str] = set()
     for slug in brands:
+        if slug in seen:
+            continue
+        seen.add(slug)
         brand_id = brand_map.get(slug)
         if not brand_id:
             continue
@@ -295,7 +304,13 @@ def upsert_mention_for_post(
     author_key = str(item.get("page_id") or item.get("page_name") or "")
     if not is_vietnam_relevant(text, permalink=str(permalink or ""), author=author_key, platform=platform):
         return False
-    brands = detect_competitive_brands(text, matches if isinstance(matches, list) else [])
+    brands = detect_competitive_brands(
+        text,
+        matches if isinstance(matches, list) else [],
+        permalink=str(permalink or ""),
+        author=author_key,
+        platform=platform,
+    )
     if not brands:
         return False
     sentiment = detect_sentiment(text)
@@ -309,12 +324,15 @@ def upsert_mention_for_post(
     like_v = _int(stats.get("like_count") or stats.get("digg_count") or item.get("like_count"))
     comment_v = _int(stats.get("comment_count") or item.get("comment_count"))
     view_v = _int(stats.get("view_count") or stats.get("play_count") or item.get("view_count"))
+    share_v = _int(stats.get("share_count") or item.get("share_count"))
     if like_v is not None:
         meta["like_count"] = like_v
     if comment_v is not None:
         meta["comment_count"] = comment_v
     if view_v is not None:
         meta["view_count"] = view_v
+    if share_v is not None:
+        meta["share_count"] = share_v
     metadata = json.dumps(meta, ensure_ascii=False, default=str)
     if occurred is None:
         return False
@@ -440,7 +458,18 @@ def upsert_comment_mentions(
         if not ext:
             ext = hashlib_fallback(c)
 
-        brands = detect_competitive_brands(text, None)
+        cur.execute("SELECT post_url FROM posts WHERE post_id = %s::uuid", (post_id,))
+        parent_row = cur.fetchone()
+        parent_url = str((parent_row or [None])[0] or "").strip() or None
+        comment_url = str(c.get("url") or "").strip() or parent_url
+
+        brands = detect_competitive_brands(
+            text,
+            None,
+            permalink=str(comment_url or ""),
+            author=str(c.get("author") or c.get("author_name") or ""),
+            platform=platform,
+        )
         if not brands and platform == "google":
             parent = parent_item or {}
             stats = parent.get("stats") if isinstance(parent.get("stats"), dict) else {}
@@ -451,17 +480,17 @@ def upsert_comment_mentions(
                     str(parent.get("post_url") or parent.get("url") or ""),
                     str(parent.get("search_keyword") or ""),
                     str(stats.get("search_keyword") or ""),
-                    " ".join(str(x) for x in (parent_matches or [])),
                 ]
             )
-            brands = detect_competitive_brands(place_blob, None)
+            brands = detect_competitive_brands(
+                place_blob,
+                None,
+                permalink=str(parent.get("post_url") or parent.get("url") or ""),
+                author=str(parent.get("page_name") or ""),
+                platform=platform,
+            )
         if not brands:
             continue
-
-        cur.execute("SELECT post_url FROM posts WHERE post_id = %s::uuid", (post_id,))
-        parent_row = cur.fetchone()
-        parent_url = str((parent_row or [None])[0] or "").strip() or None
-        comment_url = str(c.get("url") or "").strip() or parent_url
 
         if not is_vietnam_relevant(
             text,

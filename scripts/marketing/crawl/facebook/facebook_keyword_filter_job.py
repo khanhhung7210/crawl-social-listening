@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.film_paths import film_slug, platform_processed_dir
+from social_listening.film_crawl_filter import keep_distribution_record, passes_film_relevance
 from social_listening.keyword_config import collect_exclude_terms, collect_search_terms, load_keyword_payload
 from social_listening.text_utils import contains_keyword, parse_compact_count
 
@@ -100,6 +101,25 @@ def build_grouped_post(
     parent_keyword_match = post_keyword_match or any(item["keyword_match"] for item in comment_items)
     if not parent_keyword_match:
         return {}
+
+    comments_payload = [
+        {
+            "text": str(item.get("comment_text") or item.get("text") or ""),
+            "keyword_matches": list(item.get("keyword_matches") or []),
+        }
+        for item in comment_items
+    ]
+    keep, filtered_comments = keep_distribution_record(post_text, post_matches, comments_payload)
+    if not keep:
+        return None
+    kept_texts = {str(c.get("text") or "") for c in filtered_comments}
+    comment_items = [
+        item
+        for item in comment_items
+        if str(item.get("comment_text") or item.get("text") or "") in kept_texts
+    ]
+    post_keyword_match = passes_film_relevance(post_text, post_matches)
+    parent_keyword_match = post_keyword_match or bool(comment_items)
 
     candidate = {
         "platform": "facebook",

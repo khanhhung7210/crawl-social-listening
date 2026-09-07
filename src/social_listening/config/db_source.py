@@ -9,6 +9,38 @@ from typing import Any
 from social_listening.pg import get_connection
 
 
+class DbConfigError(RuntimeError):
+    """DB keyword config exists or was requested but could not be loaded."""
+
+
+class DbConnectionError(DbConfigError):
+    """Cannot reach Postgres for keyword config."""
+
+
+class DbConfigEmptyError(DbConfigError):
+    """Postgres reachable but no listening_queries rows for this profile."""
+
+
+def marketing_listening_queries_exist() -> bool:
+    """Return True when Dashboard brand listening_queries are present in DB."""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM listening_queries
+                WHERE query_type = 'brand'
+                  AND is_active = TRUE
+                """
+            )
+            return int(cur.fetchone()[0] or 0) > 0
+    except Exception as exc:
+        raise DbConnectionError(
+            "Cannot connect to Postgres to read listening_queries keyword config"
+        ) from exc
+
+
 def _term_values(items: Any, *, include_match: bool = True) -> list[str]:
     if not isinstance(items, list):
         return []
@@ -168,7 +200,7 @@ def _load_mkt_payload() -> dict[str, Any]:
         )
         rows = cur.fetchall()
         if not rows:
-            raise RuntimeError(
+            raise DbConfigEmptyError(
                 "No listening_queries in DB. Run scripts/shared/seed_listening_config.py "
                 "or set SOCIAL_CONFIG_SOURCE=file"
             )

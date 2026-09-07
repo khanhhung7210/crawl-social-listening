@@ -129,6 +129,51 @@ CINESTAR_BRANCHES: list[str] = [
     "cinestar quoc thanh",
 ]
 
+# Foreign cinema market — suppress competitor tags when content is clearly non-VN.
+FOREIGN_CINEMA_MARKET_RE = re.compile(
+    r"""
+    \b(hàn\s*quốc|han\s*quoc|korea|south\s*korea|
+    seoul|busan|hongdae|daegu|daegwallyeong|incheon|
+    nhật\s*bản|nhat\s*ban|japan|tokyo|osaka|
+    philippines|indonesia|malaysia|thailand|singapore|
+    india|pakistan|egypt|uae|dubai|china|trung\s*quốc)\b|
+    cgv\s*(korea|indonesia|china|philippines)|
+    lotte\s*cinema\s*(korea|indonesia)|
+    megabox\s+hongdae|
+    tại\s+(các\s+)?rạp\s+(ở\s+)?hàn|
+    ra\s+(mắt\s+)?(tại\s+)?rạp\s+hàn|
+    khởi\s*chiếu\s+tại\s+hàn|
+    galaxy\s*cinema\s*egypt|galaxycinemaegypt|
+    starnews?korea|\.co\.kr\b
+    """,
+    re.I | re.VERBOSE,
+)
+
+VN_CINEMA_MARKET_RE = re.compile(
+    r"""
+    \b(việt\s*nam|viet\s*nam|vietnam|
+    (?<![-a-z/])vn(?![-a-z0-9])|
+    hà\s*nội|ha\s*noi|hanoi|
+    tp\.?\s*hcm|hcm\b|tphcm|hồ\s*chí\s*minh|ho\s*chi\s*minh|
+    đà\s*nẵng|da\s*nang|cần\s*thơ|can\s*tho|
+    bình\s*dương|binh\s*duong|đồng\s*nai|dong\s*nai|
+    hải\s*phòng|hai\s*phong|
+    saigon|sài\s*gòn|sai\s*gon)\b|
+    thị\s*trường\s*(điện\s*ảnh\s*)?(việt|viet|vn)|
+    cgv\s*(vietnam|việt\s*nam|viet\s*nam)|
+    lotte\s*cinema\s*(việt\s*nam|viet\s*nam|vietnam)|
+    galaxy\s*cinema\s*(việt\s*nam|viet\s*nam|vietnam)|
+    tại\s+(hà\s*nội|ha\s*noi|hanoi|tp\.?\s*hcm|tphcm|việt\s*nam|vietnam|
+             đà\s*nẵng|da\s*nang|cần\s*thơ|can\s*tho|bình\s*dương|binh\s*duong)
+    """,
+    re.I | re.VERBOSE,
+)
+
+FOREIGN_PUBLISHER_RE = re.compile(
+    r"cineplay\.co\.kr|koreatimes\.co\.kr|koreajoongangdaily\.joins\.com|starnews?korea",
+    re.I,
+)
+
 COMPETITIVE_PATTERNS: dict[str, list[str]] = {
     "glx": [
         "galaxy cinema",
@@ -204,7 +249,7 @@ BRAND_PATTERNS: list[tuple[str, list[str]]] = [
 # Brand-scoped hard excludes (match brand + exclude → drop that brand only)
 GLX_EXCLUDE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(
-        r"\b(samsung|galaxy\s*(note|a\d*|s\d*|tab|watch|buds?|z(?:\s*(?:fold|flip))?))\b",
+        r"\b(samsung|galaxy\s*(note|a\d*|s\d*|ultra|tab|watch|buds?|z(?:\s*(?:fold|flip))?))\b",
         re.I,
     ),
     re.compile(r"\b(jaipur|india|ấn\s*độ|an\s*do|naroda|avenue)\b", re.I),
@@ -213,8 +258,10 @@ GLX_EXCLUDE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"galaxycinemaegypt|galaxy\s*cinema\s*egypt", re.I),
 ]
 
-# Ticket-scalper / recruiting / GDTG spam — drop all brand tagging
-SPAM_EXCLUDE_PHRASES: list[str] = [
+# Ticket-scalper / recruiting / GDTG spam — drop all brand tagging.
+# Soft phrases alone are common in legit cinema promos; they only suppress tagging
+# when no explicit competitive brand signal is present.
+SPAM_HARD_PHRASES: list[str] = [
     "tuyển dụng",
     "part-time",
     "parttime",
@@ -233,9 +280,32 @@ SPAM_EXCLUDE_PHRASES: list[str] = [
     "số lượng lớn",
     "tất cả các phim",
     "tất cả các rạp",
-    "các suất chiếu",
     "áp dụng cho tất cả",
 ]
+
+# Generic cinema wording that appears in both spam and legitimate schedules/promos.
+SPAM_SOFT_PHRASES: list[str] = [
+    "các suất chiếu",
+]
+
+# Backward-compatible union (tests / callers that iterate the flat list).
+SPAM_EXCLUDE_PHRASES: list[str] = SPAM_HARD_PHRASES + SPAM_SOFT_PHRASES
+
+# Explicit competitive brand signals — soft spam must not wipe these alone.
+EXPLICIT_CINEMA_BRAND_RE = re.compile(
+    r"(?:"
+    r"galaxy\s*cinema|galaxy\s*cine|r[aạ]p\s*galaxy|#galaxycinema|#galaxymovie|galaxycine\.vn|"
+    r"\bcgv\b|#cgv|cgv\s*cinemas?|r[aạ]p\s*cgv|"
+    r"lotte\s*cinema|#lottecinema|"
+    r"beta\s*cinemas|beta\s*cineplex|r[aạ]p\s*beta|#betacinemas|"
+    r"bhd\s*star|bhd\s*cineplex|#bhdstar|"
+    r"\bcinestar\b|#cinestar|r[aạ]p\s*cinestar"
+    r")",
+    re.I,
+)
+
+# Official Galaxy Cinema VN site — publisher/domain proof for GLX (not crawl keywords).
+GLX_OWNED_PUBLISHER_RE = re.compile(r"galaxycine\.vn\b", re.I)
 
 LOTTE_EXCLUDE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(
@@ -297,11 +367,30 @@ def hits_exclude(text: str, permalink: str = "", author: str = "") -> bool:
 
 
 def hits_spam_exclude(text: str, permalink: str = "", author: str = "") -> bool:
-    """True if text looks like ticket-resale / recruiting / GDTG spam."""
+    """True if text looks like ticket-resale / recruiting / GDTG spam.
+
+    Soft phrases (e.g. ``các suất chiếu``) alone do not suppress tagging when an
+    explicit competitive brand signal is present — those phrases appear in
+    legitimate cinema schedules/promos.
+    """
     blob = normalize(" ".join([text or "", permalink or "", author or ""]))
     if not blob:
         return False
-    return any(phrase in blob for phrase in SPAM_EXCLUDE_PHRASES)
+    if any(phrase in blob for phrase in SPAM_HARD_PHRASES):
+        return True
+    if any(phrase in blob for phrase in SPAM_SOFT_PHRASES):
+        return not bool(EXPLICIT_CINEMA_BRAND_RE.search(blob))
+    return False
+
+
+def _has_glx_ok(blob: str) -> bool:
+    """Galaxy Cinema competitive match, including owned publisher galaxycine.vn."""
+    if _glx_excluded(blob):
+        return False
+    if any(p in blob for p in COMPETITIVE_PATTERNS["glx"]):
+        return True
+    # Official VN site as publisher/source (body may omit "Galaxy Cinema").
+    return bool(GLX_OWNED_PUBLISHER_RE.search(blob))
 
 
 def _blob_has_any(blob: str, patterns: list[str]) -> bool:
@@ -361,21 +450,69 @@ def _has_bhd_ok(blob: str) -> bool:
     return False
 
 
-def detect_competitive_brands(text: str, matches: list[str] | None = None) -> list[str]:
-    """Return brand slugs that fairly match content (SoV / import tagging)."""
-    if hits_spam_exclude(text):
+def _build_brand_blob(
+    text: str,
+    permalink: str = "",
+    author: str = "",
+) -> str:
+    """Brand tagging uses content only — crawl keyword matches are not brand proof."""
+    return normalize(" ".join([text or "", permalink or "", author or ""]))
+
+
+def _has_foreign_cinema_market(blob: str) -> bool:
+    return bool(FOREIGN_CINEMA_MARKET_RE.search(blob) or FOREIGN_PUBLISHER_RE.search(blob))
+
+
+def _has_vn_cinema_market(blob: str) -> bool:
+    return bool(VN_CINEMA_MARKET_RE.search(blob))
+
+
+def _foreign_blocks_competitors(blob: str) -> bool:
+    """Foreign cinema market blocks competitor tags unless VN market is explicit."""
+    if not _has_foreign_cinema_market(blob):
+        return False
+    return not _has_vn_cinema_market(blob)
+
+
+def _has_cgv_ok(blob: str) -> bool:
+    if not re.search(r"\bcgv\b|#cgv", blob):
+        return False
+    if _foreign_blocks_competitors(blob):
+        return False
+    if _blob_has_any(blob, CGV_BRANCHES):
+        return True
+    if re.search(r"cgv\s*(cinemas?|vietnam|việt\s*nam|viet\s*nam)|r[aạ]p\s*cgv|#cgvvietnam", blob):
+        return True
+    if re.search(r"#cgv\b", blob):
+        return True
+    return bool(re.search(r"\bcgv\b", blob))
+
+
+def detect_competitive_brands(
+    text: str,
+    matches: list[str] | None = None,
+    *,
+    permalink: str = "",
+    author: str = "",
+    platform: str | None = None,
+) -> list[str]:
+    """Return brand slugs that fairly match content (SoV / import tagging).
+
+    ``matches`` is ignored for tagging — keyword crawl hits are not valid brand mentions.
+    """
+    _ = matches  # crawl discovery only; kept for call-site compatibility
+    if hits_spam_exclude(text, permalink, author):
         return []
-    blob = normalize(" ".join([text or ""] + list(matches or [])))
+    blob = _build_brand_blob(text, permalink, author)
     if not blob:
         return []
 
     found: list[str] = []
     for slug, patterns in COMPETITIVE_PATTERNS.items():
         if slug == "glx":
-            if _glx_excluded(blob):
+            if not _has_glx_ok(blob):
                 continue
-            if any(p in blob for p in patterns):
-                found.append(slug)
+            found.append(slug)
             continue
 
         if slug == "lotte":
@@ -383,11 +520,15 @@ def detect_competitive_brands(text: str, matches: list[str] | None = None) -> li
                 continue
             if not _has_lotte_cinema(blob):
                 continue
+            if _foreign_blocks_competitors(blob):
+                continue
             found.append(slug)
             continue
 
         if slug == "beta":
             if not _has_beta_ok(blob):
+                continue
+            if _foreign_blocks_competitors(blob):
                 continue
             found.append(slug)
             continue
@@ -395,16 +536,32 @@ def detect_competitive_brands(text: str, matches: list[str] | None = None) -> li
         if slug == "bhd":
             if not _has_bhd_ok(blob):
                 continue
+            if _foreign_blocks_competitors(blob):
+                continue
             found.append(slug)
             continue
 
         if slug == "cgv":
-            if not re.search(r"\bcgv\b|#cgv", blob):
+            if not _has_cgv_ok(blob):
+                continue
+            found.append(slug)
+            continue
+
+        if slug == "cinestar":
+            if _foreign_blocks_competitors(blob):
+                continue
+            if not (
+                _blob_has_any(blob, CINESTAR_BRANCHES)
+                or re.search(r"r[aạ]p\s*cinestar|#cinestar", blob)
+                or re.search(r"\bcinestar\b", blob)
+            ):
                 continue
             found.append(slug)
             continue
 
         if any(p in blob for p in patterns):
+            if _foreign_blocks_competitors(blob):
+                continue
             found.append(slug)
 
     out: list[str] = []
@@ -414,9 +571,22 @@ def detect_competitive_brands(text: str, matches: list[str] | None = None) -> li
     return out
 
 
-def detect_brands(text: str, matches: list[str] | None = None) -> list[str]:
+def detect_brands(
+    text: str,
+    matches: list[str] | None = None,
+    *,
+    permalink: str = "",
+    author: str = "",
+    platform: str | None = None,
+) -> list[str]:
     """Legacy broader detect — prefer competitive for DB tagging."""
-    brands = detect_competitive_brands(text, matches)
+    brands = detect_competitive_brands(
+        text,
+        matches,
+        permalink=permalink,
+        author=author,
+        platform=platform,
+    )
     return brands or ["others"]
 
 

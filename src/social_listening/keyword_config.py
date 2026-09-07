@@ -1,41 +1,29 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from social_listening.paths import DATA_DIR
 
+logger = logging.getLogger(__name__)
 
 SHARED_KEYWORD_CONFIG_FILE = DATA_DIR / "shared" / "social_keywords.json"
 
 
 def _config_source() -> str:
-    return str(os.getenv("SOCIAL_CONFIG_SOURCE") or "file").strip().lower()
+    """Return config source mode: db | file | auto."""
+    return str(os.getenv("SOCIAL_CONFIG_SOURCE") or "auto").strip().lower()
 
 
-def load_keyword_payload(path: Path | None = None) -> dict:
-    """Load keyword config.
+def _is_distribution_profile() -> bool:
+    profile = (os.getenv("SOCIAL_LISTENING_PROFILE") or "mkt").strip().lower()
+    slug = (os.getenv("SOCIAL_FILM_SLUG") or "").strip()
+    return profile in {"dis", "distribution", "film"} or bool(slug)
 
-    Priority:
-    1. Explicit ``path`` argument
-    2. When ``SOCIAL_CONFIG_SOURCE=db`` → Postgres (MKT or DIS via SOCIAL_FILM_SLUG)
-    3. ``SOCIAL_KEYWORD_CONFIG_FILE`` / ``KEYWORD_CONFIG_FILE``
-    4. shared ``social_keywords.json``
-    """
-    if path is not None:
-        if not path.exists():
-            raise FileNotFoundError(f"Keyword config file not found: {path}")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Expected object payload in {path}")
-        return payload
 
-    if _config_source() == "db":
-        from social_listening.config.db_source import load_keyword_payload_from_db
-
-        return load_keyword_payload_from_db()
-
+def _load_from_file() -> dict:
     env_path = str(os.getenv("SOCIAL_KEYWORD_CONFIG_FILE") or os.getenv("KEYWORD_CONFIG_FILE") or "").strip()
     keyword_file = Path(env_path) if env_path else SHARED_KEYWORD_CONFIG_FILE
     if not keyword_file.exists():
@@ -45,6 +33,109 @@ def load_keyword_payload(path: Path | None = None) -> dict:
     if not isinstance(payload, dict):
         raise RuntimeError(f"Expected object payload in {keyword_file}")
     return payload
+
+
+def _load_from_db() -> dict:
+    from social_listening.config.db_source import load_keyword_payload_from_db
+
+    return load_keyword_payload_from_db()
+
+
+def load_keyword_payload(path: Path | None = None) -> dict:
+    """Load keyword config.
+
+    Priority:
+    1. Explicit ``path`` argument
+    2. ``SOCIAL_CONFIG_SOURCE=db`` → Postgres (MKT or DIS via SOCIAL_FILM_SLUG)
+    3. ``SOCIAL_CONFIG_SOURCE=file`` → ``SOCIAL_KEYWORD_CONFIG_FILE`` / shared JSON
+    4. ``SOCIAL_CONFIG_SOURCE=auto`` (default) → DB when listening_queries exist,
+       else file fallback for local/dev bootstrap only
+    """
+    if path is not None:
+        if not path.exists():
+            raise FileNotFoundError(f"Keyword config file not found: {path}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Expected object payload in {path}")
+        return payload
+
+    source = _config_source()
+    if source == "file":
+        return _load_from_file()
+
+    if source == "db":
+        return _load_from_db()
+
+    if source == "auto":
+        return _load_auto()
+
+    raise RuntimeError(
+        f"Invalid SOCIAL_CONFIG_SOURCE={source!r}. Use one of: auto, db, file"
+    )
+
+
+def _load_auto() -> dict:
+    from social_listening.config.db_source import (
+        DbConfigEmptyError,
+        DbConnectionError,
+        marketing_listening_queries_exist,
+    )
+
+    if _is_distribution_profile():
+        try:
+            return _load_from_db()
+        except DbConfigEmptyError:
+            logger.warning(
+                "SOCIAL_CONFIG_SOURCE=auto: no film listening_queries in DB; "
+                "falling back to keyword file"
+            )
+            return _load_from_file()
+        except DbConnectionError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "SOCIAL_CONFIG_SOURCE=auto: distribution DB keyword config failed"
+            ) from exc
+
+    try:
+        if marketing_listening_queries_exist():
+            return _load_from_db()
+    except DbConnectionError:
+        raise RuntimeError(
+            "SOCIAL_CONFIG_SOURCE=auto: Postgres is unreachable; "
+            "refusing to fall back to social_keywords.json. "
+            "Set SOCIAL_CONFIG_SOURCE=file for offline crawl."
+        ) from None
+
+    logger.warning(
+        "SOCIAL_CONFIG_SOURCE=auto: no brand listening_queries in DB; "
+        "falling back to %s",
+        SHARED_KEYWORD_CONFIG_FILE,
+    )
+    return _load_from_file()
+
+
+def uses_db_keyword_config() -> bool:
+    """Return True when the next crawl would load keywords from Postgres."""
+    source = _config_source()
+    if source == "db":
+        return True
+    if source == "file":
+        return False
+    if _is_distribution_profile():
+        try:
+            from social_listening.config.db_source import marketing_listening_queries_exist
+
+            _ = marketing_listening_queries_exist  # distribution always tries DB first
+            return True
+        except Exception:
+            return False
+    try:
+        from social_listening.config.db_source import marketing_listening_queries_exist
+
+        return marketing_listening_queries_exist()
+    except Exception:
+        return False
 
 
 def resolve_active_process(payload: dict, process_name: str | None = None) -> str:

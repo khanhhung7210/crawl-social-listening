@@ -50,11 +50,14 @@ def normalize(text: str) -> str:
 
 
 def term_in_text(term: str, blob: str) -> bool:
-    """True if normalized term appears in blob; short tokens use word boundaries."""
+    """True if normalized term appears in blob; single tokens use word boundaries."""
     t = normalize(term)
     if not t or not blob:
         return False
-    if t.startswith("#") or " " in t or len(t) >= 5:
+    if t.startswith("#"):
+        bare = t.lstrip("#")
+        return t in blob or (bare and bare in blob)
+    if " " in t:
         return t in blob
     return bool(re.search(rf"(?<![a-z0-9#]){re.escape(t)}(?![a-z0-9])", blob))
 
@@ -64,6 +67,7 @@ class FilmDetectConfig:
     slug: str
     # (raw, norm, requires_context)
     terms: list[tuple[str, str, bool]] = field(default_factory=list)
+    core_norms: set[str] = field(default_factory=set)
     context: list[str] = field(default_factory=list)
     ambiguous_context: list[str] = field(default_factory=list)
     exclude: list[str] = field(default_factory=list)
@@ -127,6 +131,9 @@ def _build_detect_config(
     require_context = bool(payload.get("require_context", False))
     listening_from = str(payload.get("listening_from") or "").strip() or None
 
+    core_set = set(core)
+    core_norms = {normalize(x) for x in core if normalize(x)}
+
     seen: set[str] = set()
     terms: list[tuple[str, str, bool]] = []
     for raw in core + crawl_terms + list(payload.get("ambiguous_keywords") or []):
@@ -138,20 +145,18 @@ def _build_detect_config(
             continue
         seen.add(norm)
         listed_amb = norm in ambiguous
-        needs_ctx = require_context or listed_amb or _is_auto_ambiguous(norm)
-        if (
-            not require_context
-            and not listed_amb
-            and not _is_auto_ambiguous(norm)
-            and raw in core
-        ):
+        in_core = raw in core_set or norm in core_norms
+        if in_core:
             needs_ctx = False
+        else:
+            needs_ctx = require_context or listed_amb or _is_auto_ambiguous(norm) or True
         terms.append((raw, norm, needs_ctx))
 
     terms.sort(key=lambda t: len(t[1]), reverse=True)
     return FilmDetectConfig(
         slug=slug,
         terms=terms,
+        core_norms=core_norms,
         context=context,
         ambiguous_context=amb_context,
         exclude=exclude,
@@ -213,18 +218,47 @@ def load_film_detect_configs() -> list[FilmDetectConfig]:
 
 
 def _context_ok(blob: str, context_terms: list[str], *, strict: bool = False) -> bool:
-    """True if any context term hits. strict=True → only listed terms (no DEFAULT movie words)."""
+    """True if any context term hits (word-boundary safe)."""
     if not context_terms:
         return False
     if any(term_in_text(w, blob) for w in context_terms):
         return True
     if strict:
         return False
-    return has_movie_context(blob, context_terms)
+    return any(term_in_text(w, blob) for w in DEFAULT_MOVIE_CONTEXT)
 
 
 def _excluded(blob: str, cfg: FilmDetectConfig) -> bool:
     return any(term_in_text(ex, blob) for ex in cfg.exclude)
+
+
+def get_film_detect_config(slug: str) -> FilmDetectConfig | None:
+    target = slug.strip().lower()
+    for cfg in load_film_detect_configs():
+        if cfg.slug == target:
+            return cfg
+    return None
+
+
+def has_core_film_signal(text: str, slug: str) -> bool:
+    cfg = get_film_detect_config(slug)
+    if not cfg or not cfg.core_norms:
+        return False
+    blob = normalize(text)
+    return any(term_in_text(core, blob) for core in cfg.core_norms)
+
+
+def film_relevant_for_slug(text: str, slug: str, *, strict: bool = False) -> bool:
+    """True when normalized text is about the given film slug."""
+    target = slug.strip().lower()
+    if not target:
+        return False
+    found = detect_film_slugs(text or "", None)
+    if target not in [s.lower() for s in found]:
+        return False
+    if not strict:
+        return True
+    return has_core_film_signal(text, target)
 
 
 def detect_film_slugs(text: str, matches: list[str] | None = None) -> list[str]:
@@ -251,14 +285,10 @@ def detect_film_slugs(text: str, matches: list[str] | None = None) -> list[str]:
         for _raw, alias_norm, needs_ctx in cfg.terms:
             if not term_in_text(alias_norm, blob):
                 continue
-            if needs_ctx or cfg.require_context:
+            if needs_ctx:
                 ok = amb_ctx if cfg.ambiguous_context else general_ctx
-                if cfg.require_context:
-                    ok = general_ctx
                 if not ok:
                     continue
-                matched = True
-                break
             matched = True
             break
 

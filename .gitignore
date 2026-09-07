@@ -13,3 +13,15 @@ tmp_*
 /runtime/chrome-crash/
 /runtime/logs/
 .claude/
+
+# Local ops dumps / backfill recovery artifacts — do not push
+/exports/
+
+# Local verification tests — do not push
+/tests/test_brand_health_sov_queries.py
+/tests/test_import_post_engagement.py
+/tests/test_keyword_config_source.py
+/tests/test_link_brands_reimport.py
+/tests/test_marketing_sentiment.py
+/tests/test_rebuild_mention_brands.py
+/tests/test_vietnam_filter.py

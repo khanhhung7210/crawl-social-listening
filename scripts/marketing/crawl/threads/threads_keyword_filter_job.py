@@ -15,6 +15,7 @@ def _project_root() -> Path:
 PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from social_listening.film_crawl_filter import keep_distribution_record, passes_film_relevance
 from social_listening.keyword_config import (
     collect_exclude_terms,
     collect_search_terms,
@@ -90,10 +91,16 @@ def build_filtered_record(
     if not parent_keyword_match:
         return {}
 
+    keep, comments = keep_distribution_record(post_text, post_keyword_matches, comments)
+    if not keep:
+        return {}
+    post_keyword_match = passes_film_relevance(post_text, post_keyword_matches)
+    parent_keyword_match = post_keyword_match or bool(comments)
+
     candidate = {
         **item,
         "post_keyword_match": post_keyword_match,
-        "post_keyword_matches": post_keyword_matches,
+        "post_keyword_matches": post_keyword_matches if post_keyword_match else [],
         "parent_keyword_match": parent_keyword_match,
         "matched_search_keyword": str(item.get("search_keyword") or "").strip(),
         "matched_search_keywords": item.get("search_keywords") or [],
