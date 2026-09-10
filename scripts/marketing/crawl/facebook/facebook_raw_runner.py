@@ -40,6 +40,12 @@ from social_listening.review_utils import (
     is_relative_only_time_label,
     parse_facebook_datetime_label,
 )
+from social_listening.crawl_freshness import (
+    KeywordCrawlStats,
+    classify_detail_freshness,
+    load_freshness_policy,
+    should_stop_keyword_details,
+)
 
 
 FACEBOOK_SEARCH_URLS = [
@@ -49,18 +55,22 @@ FACEBOOK_SEARCH_URLS = [
 ]
 DEBUGGER_ADDRESS = os.getenv("FACEBOOK_DEBUGGER_ADDRESS", "127.0.0.1:9226")
 OUTPUT_ROOT = DATA_DIR / "facebook" / "raw" / film_slug()
-MAX_POSTS = int(os.getenv("FACEBOOK_MAX_POSTS", "100"))
-MAX_POSTS_PER_KEYWORD = int(os.getenv("FACEBOOK_MAX_POSTS_PER_KEYWORD", str(MAX_POSTS)))
-MAX_SCROLL_ROUNDS = int(os.getenv("FACEBOOK_MAX_SCROLL_ROUNDS", "80"))
-IDLE_ROUNDS_BEFORE_STOP = int(os.getenv("FACEBOOK_IDLE_ROUNDS_BEFORE_STOP", "8"))
-MAX_EMPTY_ROUNDS_BEFORE_SKIP = int(os.getenv("FACEBOOK_MAX_EMPTY_ROUNDS_BEFORE_SKIP", "5"))
+POLICY = load_freshness_policy("facebook")
+MAX_POSTS = POLICY.max_new_urls_per_keyword
+MAX_POSTS_PER_KEYWORD = int(
+    os.getenv("FACEBOOK_MAX_POSTS_PER_KEYWORD", str(POLICY.max_new_urls_per_keyword))
+)
+MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
+IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
+MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
 SCROLL_PAUSE_SECONDS = float(os.getenv("FACEBOOK_SCROLL_PAUSE_SECONDS", "2.0"))
 PAGE_LOAD_WAIT_SECONDS = float(os.getenv("FACEBOOK_PAGE_LOAD_WAIT_SECONDS", "5.0"))
 POST_LOAD_WAIT_SECONDS = float(os.getenv("FACEBOOK_POST_LOAD_WAIT_SECONDS", "3.0"))
-MAX_COMMENTS = int(os.getenv("FACEBOOK_MAX_COMMENTS", "200"))
-COMMENT_LOAD_ROUNDS = int(os.getenv("FACEBOOK_COMMENT_LOAD_ROUNDS", "24"))
-COMMENT_IDLE_ROUNDS_BEFORE_STOP = int(os.getenv("FACEBOOK_COMMENT_IDLE_ROUNDS_BEFORE_STOP", "5"))
+MAX_COMMENTS = POLICY.max_comments
+COMMENT_LOAD_ROUNDS = POLICY.max_comment_scroll_rounds
+COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
 COMMENT_LOAD_PAUSE_SECONDS = float(os.getenv("FACEBOOK_COMMENT_LOAD_PAUSE_SECONDS", "1.75"))
+KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 DEBUG_COMMENT_LOADING = str(os.getenv("FACEBOOK_DEBUG_COMMENTS", "")).strip().lower() in {"1", "true", "yes", "on"}
 FORCE_RECrawl = str(os.getenv("FACEBOOK_FORCE_RECrawl", "")).strip().lower() in {"1", "true", "yes", "on"}
 CRAWL_TIME_REJECT_WINDOW_SECONDS = int(os.getenv("FACEBOOK_CRAWL_TIME_REJECT_WINDOW_SECONDS", "900"))
@@ -113,7 +123,17 @@ def main(force: bool = False) -> int:
         print(f"[facebook-search] Run type: {run_type}")
         print(f"[facebook-search] Keywords: {len(search_terms)}")
         print(f"[facebook-search] Existing URLs in state: {len(existing_urls)}")
-        print(f"[facebook-search] ⚠️  Note: Facebook search is non-chronological, cannot early-stop")
+        print(
+            f"[facebook-search] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"max_new={MAX_POSTS_PER_KEYWORD} scroll={MAX_SCROLL_ROUNDS} "
+            f"keyword_runtime={KEYWORD_RUNTIME_SECONDS}s "
+            f"max_stale_details={POLICY.max_stale_details_per_keyword}"
+        )
+        print(
+            "[facebook-search] Note: Facebook search is non-chronological; "
+            "no early-stop on consecutive previously-seen URLs; "
+            "stale posts (by content timestamp) are not counted as current coverage"
+        )
 
         run_id = state.start_run("facebook", run_type)
 
@@ -128,44 +148,59 @@ def main(force: bool = False) -> int:
             total_urls_discovered = 0
             total_urls_crawled = 0
             total_urls_skipped = 0
+            total_stale = 0
 
             for index, keyword in enumerate(search_terms, start=1):
                 safe_keyword = sanitize_filename(keyword) or f"keyword_{index}"
                 file_path = output_dir / f"search_{safe_keyword}.jsonl"
+                keyword_started = time.monotonic()
+                stats = KeywordCrawlStats(keyword=keyword)
 
-                # Check if keyword file already exists from today
-                if not force_recrawl and file_path.exists() and file_path.stat().st_size > 0:
-                    print(f"[facebook-search] skip keyword={keyword} existing_file={file_path.name}")
-                    processed_keywords += 1
-                    continue
+                # Always re-search; append to today's file instead of skipping the keyword.
+                # Previously skipping non-empty same-day files blocked afternoon coverage.
+                already_in_file = load_existing_post_urls_from_jsonl(file_path)
 
                 print(f"[facebook-search] {index}/{len(search_terms)} keyword={keyword}")
                 try:
                     search_result = search_posts_for_keyword(driver, keyword)
                 except Exception as exc:
                     print(f"[facebook-search] skip keyword={keyword} error={exc}")
+                    stats.detail_failed += 1
+                    stats.runtime_seconds = time.monotonic() - keyword_started
+                    stats.stop_reason = "search_error"
+                    stats.log("facebook-search")
                     processed_keywords += 1
                     continue
 
-                # Dedupe URLs: session + global state
+                # Dedupe URLs: session + global state + already written today
                 keyword_urls = []
                 for url in search_result["urls"]:
-                    if url in session_crawled_urls or url in existing_urls:
+                    stats.discovered += 1
+                    if (
+                        url in session_crawled_urls
+                        or url in existing_urls
+                        or url in already_in_file
+                    ):
+                        stats.already_seen += 1
                         total_urls_skipped += 1
                         continue
                     session_crawled_urls.add(url)
                     keyword_urls.append(url)
 
                 total_urls_discovered += len(search_result["urls"])
+                stats.new = len(keyword_urls)
 
-                print(
-                    f"[facebook-search] keyword={keyword} discovered={len(search_result['urls'])} "
-                    f"new={len(keyword_urls)} skipped={len(search_result['urls']) - len(keyword_urls)}"
-                )
-
-                # Crawl details for new URLs only
+                # Crawl details for new URLs only; apply freshness before counting coverage
                 posts: list[dict] = []
+                stale_details = 0
                 for url_index, url in enumerate(keyword_urls[:MAX_POSTS_PER_KEYWORD], start=1):
+                    if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
+                        stats.stop_reason = "keyword_runtime_limit"
+                        break
+                    if should_stop_keyword_details(stale_details, POLICY):
+                        stats.stop_reason = "max_stale_details"
+                        break
+
                     if url_index % 10 == 0:
                         print(
                             f"[facebook-search] keyword={keyword} crawling detail "
@@ -174,6 +209,24 @@ def main(force: bool = False) -> int:
 
                     driver, post = crawl_post_with_retries(driver, url)
                     if not post:
+                        stats.detail_failed += 1
+                        continue
+
+                    content_timestamp = post.get("created_time")
+                    freshness = classify_detail_freshness(content_timestamp, POLICY)
+
+                    # Mark in state with real content time so we do not rediscover forever.
+                    # Stale marks are NOT treated as successful current coverage below.
+                    state.mark_crawled(url, "facebook", keyword, content_timestamp)
+                    existing_urls.add(url)
+
+                    if freshness == "stale":
+                        stats.stale += 1
+                        stale_details += 1
+                        total_stale += 1
+                        # Skip comment expansion work already done inside crawl_post for stale:
+                        # crawl_post crawls comments before we know — re-crawl with skip would be
+                        # costlier; we drop stale from output instead.
                         continue
 
                     post_key = canonical_post_key(post)
@@ -182,23 +235,25 @@ def main(force: bool = False) -> int:
                     if post_key:
                         session_crawled_post_keys.add(post_key)
 
+                    comments = ((post.get("comments") or {}).get("data") or [])
+                    stats.comments_found += int(post.get("comments_found") or 0)
+                    crawled_n = post.get("comments_crawled")
+                    if crawled_n is None:
+                        crawled_n = len(comments) if isinstance(comments, list) else 0
+                    stats.comments_crawled += int(crawled_n)
                     posts.append(post)
+                    stats.detail_success += 1
                     total_urls_crawled += 1
 
-                    # Mark URL as crawled in state
-                    content_timestamp = post.get("created_time")
-                    state.mark_crawled(url, "facebook", keyword, content_timestamp)
+                # Append fresh posts only (preserve prior same-day fresh rows)
+                append_posts_to_jsonl(file_path, posts)
 
-                # Save keyword results to JSONL
-                with file_path.open("w", encoding="utf-8") as file:
-                    if posts:
-                        file.write("\n".join(json.dumps(post, ensure_ascii=False) for post in posts) + "\n")
-
-                print(
-                    f"[facebook-search] finished keyword={keyword} status={search_result['status']} "
-                    f"reason={search_result.get('reason', '')} new_urls={len(keyword_urls)} "
-                    f"posts_crawled={len(posts)} file={file_path.name}"
-                )
+                if not stats.stop_reason:
+                    stats.stop_reason = search_result.get("reason", "")
+                stats.runtime_seconds = time.monotonic() - keyword_started
+                stats.extras["file"] = file_path.name
+                stats.extras["status"] = search_result.get("status", "")
+                stats.log("facebook-search")
                 processed_keywords += 1
 
             # Complete run tracking
@@ -214,9 +269,10 @@ def main(force: bool = False) -> int:
             print(f"  - Output directory: {output_dir.resolve()}")
             print(f"  - Keywords processed: {processed_keywords}/{len(search_terms)}")
             print(f"  - URLs discovered: {total_urls_discovered}")
-            print(f"  - URLs crawled (detail): {total_urls_crawled}")
+            print(f"  - Fresh posts crawled (coverage): {total_urls_crawled}")
+            print(f"  - Stale details skipped: {total_stale}")
             print(f"  - URLs skipped (already had): {total_urls_skipped}")
-            print(f"  - Total URLs in state: {len(existing_urls) + total_urls_crawled}")
+            print(f"  - Total URLs in state: {len(existing_urls)}")
             return 0
         finally:
             driver.quit()
@@ -229,8 +285,15 @@ def search_posts_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
     seen: set[str] = set()
     idle_rounds = 0
     empty_rounds = 0
+    started_at = time.monotonic()
 
     for _ in range(MAX_SCROLL_ROUNDS):
+        if time.monotonic() - started_at >= KEYWORD_RUNTIME_SECONDS:
+            return {
+                "urls": urls,
+                "status": "partial" if urls else "no_results",
+                "reason": "keyword_runtime_limit",
+            }
         before_count = len(urls)
         for raw_href in get_anchor_hrefs(driver):
             href = normalize_post_url(raw_href)
@@ -545,12 +608,57 @@ def crawl_post(driver: webdriver.Chrome, post_url: str) -> dict:
         "comment_count": engagement.get("comment_count"),
         "share_count": engagement.get("share_count"),
         "comments": {"data": []},
+        "comments_found": 0,
+        "comments_crawled": 0,
     }
 
+    freshness = classify_detail_freshness(created_time, POLICY)
+    post["freshness"] = freshness
+    # Skip expensive comment pagination for validated-stale posts.
+    if freshness == "stale":
+        return post
+
     if MAX_COMMENTS != 0:
-        post["comments"]["data"] = extract_comments(driver, canonical_url)[:comment_limit()]
+        comments = extract_comments(driver, canonical_url)[:comment_limit()]
+        post["comments"]["data"] = comments
+        post["comments_crawled"] = len(comments)
+        # comments_found = actually loaded nodes, not the UI comment_count claim
+        post["comments_found"] = len(comments)
 
     return post
+
+
+def load_existing_post_urls_from_jsonl(path: Path) -> set[str]:
+    urls: set[str] = set()
+    if not path.exists() or path.stat().st_size <= 0:
+        return urls
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(item, dict):
+                continue
+            for key in ("permalink_url", "url"):
+                raw = str(item.get(key) or "").strip()
+                normalized = normalize_post_url(raw)
+                if normalized:
+                    urls.add(normalized)
+    except Exception:
+        return urls
+    return urls
+
+
+def append_posts_to_jsonl(path: Path, posts: list[dict]) -> None:
+    if not posts:
+        return
+    ensure_dir(path.parent)
+    with path.open("a", encoding="utf-8") as file:
+        file.write("\n".join(json.dumps(post, ensure_ascii=False) for post in posts) + "\n")
 
 
 def extract_post_engagement(driver: webdriver.Chrome) -> dict:

@@ -117,10 +117,19 @@ def run_mxh_round(platform: str, args: argparse.Namespace) -> int:
     if args.skip_sync or not args.import_db:
         cmd.append("--skip-sync")
 
-    log(f"MXH start platform={platform}")
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env_python())
-    log(f"MXH end platform={platform} exit={result.returncode}")
-    return result.returncode
+    # Hard ceiling so one stuck platform cannot block continuous indefinitely.
+    # Default 4h; override with CONTINUOUS_PLATFORM_TIMEOUT_SECONDS.
+    timeout_s = int(os.getenv("CONTINUOUS_PLATFORM_TIMEOUT_SECONDS", "14400") or "14400")
+    timeout_s = max(300, timeout_s)
+
+    log(f"MXH start platform={platform} timeout={timeout_s}s")
+    try:
+        result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env_python(), timeout=timeout_s)
+        log(f"MXH end platform={platform} exit={result.returncode}")
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        log(f"MXH TIMEOUT platform={platform} after {timeout_s}s — continuing next round")
+        return 124
 
 
 def run_news_and_apps(args: argparse.Namespace) -> None:

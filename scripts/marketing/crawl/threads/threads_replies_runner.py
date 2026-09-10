@@ -31,6 +31,13 @@ from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import (
+    KeywordCrawlStats,
+    classify_detail_freshness,
+    extract_unix_create_time_from_html,
+    load_freshness_policy,
+    should_stop_keyword_details,
+)
 
 
 DEBUGGER_ADDRESS = os.getenv("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9222")
@@ -41,9 +48,14 @@ FILTERED_INPUT_FILE = platform_raw_dir("threads") / "threads_search_results_filt
 INPUT_FILE = platform_raw_dir("threads") / "threads_search_results.json"
 LEGACY_FILTERED_INPUT_FILE = DATA_DIR / "threads" / "raw" / "threads_search_results_filtered.json"
 LEGACY_INPUT_FILE = DATA_DIR / "threads" / "raw" / "threads_search_results.json"
-MAX_SCROLL_ROUNDS_PER_THREAD = int(os.getenv("THREADS_REPLY_SCROLL_ROUNDS", "12"))
+POLICY = load_freshness_policy("threads")
+MAX_SCROLL_ROUNDS_PER_THREAD = POLICY.max_comment_scroll_rounds
 SCROLL_PAUSE_SECONDS = float(os.getenv("THREADS_REPLY_SCROLL_PAUSE_SECONDS", "1.5"))
-IDLE_ROUNDS_BEFORE_STOP = int(os.getenv("THREADS_REPLY_IDLE_ROUNDS", "3"))
+IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
+MAX_REPLIES = POLICY.max_comments
+DETAIL_KEYWORD_RUNTIME_SECONDS = int(
+    os.getenv("THREADS_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
+)
 OUTPUT_FILE = platform_raw_dir("threads") / "threads_all_threads.json"
 
 
@@ -66,45 +78,56 @@ def main() -> int:
     # Initialize crawl state for detail crawling
     with IncrementalCrawlState() as state:
         run_id = state.start_run("threads_detail", "incremental")
+        stale_by_keyword: dict[str, int] = {}
+        started_by_keyword: dict[str, float] = {}
+        stats_by_keyword: dict[str, KeywordCrawlStats] = {}
 
         driver = build_driver()
         try:
             ensure_dir(OUTPUT_FILE.parent)
             records = load_existing_records(OUTPUT_FILE)
-            processed_urls = {normalize_thread_url(str(item.get("url") or "").strip()) for item in records if isinstance(item, dict)}
+            processed_urls = {
+                normalize_thread_url(str(item.get("url") or "").strip())
+                for item in records
+                if isinstance(item, dict)
+            }
 
             print(f"[threads-detail] Total URLs to process: {len(thread_urls)}")
             print(f"[threads-detail] Already processed: {len(processed_urls)}")
+            print(
+                f"[threads-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+                f"reply_scroll={MAX_SCROLL_ROUNDS_PER_THREAD} max_replies={MAX_REPLIES}"
+            )
 
             crawled_count = 0
             skipped_count = 0
+            stale_count = 0
+            failed_count = 0
             total = len(thread_urls)
 
             for index, item in enumerate(thread_urls, start=1):
                 url = item["url"]
                 search_keyword = item["keyword"]
                 search_keywords = item.get("keywords") or ([search_keyword] if search_keyword else [])
+                kw_stats = stats_by_keyword.setdefault(
+                    search_keyword, KeywordCrawlStats(keyword=search_keyword or "(none)")
+                )
+                started_by_keyword.setdefault(search_keyword, time.monotonic())
 
                 if url in processed_urls:
                     print(f"[{index}/{total}] skip already processed {url}")
                     skipped_count += 1
                     continue
 
+                if should_stop_keyword_details(stale_by_keyword.get(search_keyword, 0), POLICY):
+                    print(f"[threads-detail] skip remaining for keyword={search_keyword}: max_stale_details")
+                    continue
+                if time.monotonic() - started_by_keyword[search_keyword] >= DETAIL_KEYWORD_RUNTIME_SECONDS:
+                    print(f"[threads-detail] skip remaining for keyword={search_keyword}: keyword_runtime_limit")
+                    continue
+
                 try:
                     record = crawl_thread(driver, url, search_keyword, search_keywords, search_terms)
-                    crawled_count += 1
-
-                    # Extract timestamp if available
-                    content_timestamp = record.get("timestamp") or record.get("created_time")
-
-                    # Mark as crawled in state
-                    state.mark_crawled(
-                        url,
-                        "threads_detail",
-                        search_keyword,
-                        content_timestamp
-                    )
-
                 except Exception as exc:
                     record = {
                         "keyword": search_keyword,
@@ -112,25 +135,81 @@ def main() -> int:
                         "url": url,
                         "matched": False,
                         "error": str(exc),
+                        "freshness": "unknown",
                     }
 
+                if record.get("error"):
+                    failed_count += 1
+                    kw_stats.detail_failed += 1
+                    records.append(record)
+                    processed_urls.add(url)
+                    save_records(records, OUTPUT_FILE)
+                    print(f"[{index}/{total}] failed {url}")
+                    continue
+
+                content_timestamp = (
+                    record.get("created_time")
+                    or record.get("timestamp")
+                    or record.get("content_timestamp")
+                )
+                freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
+                record["freshness"] = freshness
+
+                state.mark_crawled(url, "threads", search_keyword, content_timestamp)
+                state.mark_crawled(url, "threads_detail", search_keyword, content_timestamp)
+
+                replies = record.get("articles") if isinstance(record.get("articles"), list) else []
+                # articles[0] is usually the root post; replies are the rest
+                reply_n = max(0, len(replies) - 1) if replies else int(record.get("comments_crawled") or 0)
+                kw_stats.comments_found += reply_n
+                kw_stats.comments_crawled += reply_n
+
+                if freshness == "stale":
+                    stale_count += 1
+                    kw_stats.stale += 1
+                    stale_by_keyword[search_keyword] = stale_by_keyword.get(search_keyword, 0) + 1
+                    records.append(
+                        {
+                            "keyword": search_keyword,
+                            "keywords": search_keywords,
+                            "url": url,
+                            "freshness": "stale",
+                            "stale": True,
+                            "coverage": False,
+                            "created_time": content_timestamp,
+                            "timestamp": content_timestamp,
+                            "articles": [],
+                        }
+                    )
+                    processed_urls.add(url)
+                    save_records(records, OUTPUT_FILE)
+                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
+                    continue
+
+                crawled_count += 1
+                kw_stats.detail_success += 1
                 records.append(record)
                 processed_urls.add(url)
                 save_records(records, OUTPUT_FILE)
-                print(f"[{index}/{total}] {url}")
+                print(f"[{index}/{total}] {url} freshness={freshness} replies_crawled={reply_n}")
 
-            # Complete run tracking
+            for kw, kw_stats in stats_by_keyword.items():
+                kw_stats.runtime_seconds = time.monotonic() - started_by_keyword.get(kw, time.monotonic())
+                kw_stats.log("threads-detail")
+
             state.complete_run(
                 run_id,
                 urls_discovered=total,
                 urls_crawled=crawled_count,
-                urls_skipped=skipped_count,
-                keywords_processed=len(set(item.get("keyword", "") for item in thread_urls))
+                urls_skipped=skipped_count + stale_count,
+                keywords_processed=len(set(item.get("keyword", "") for item in thread_urls)),
             )
 
             print(f"[threads-detail] Summary:")
-            print(f"  - URLs crawled: {crawled_count}")
-            print(f"  - URLs skipped: {skipped_count}")
+            print(f"  - Fresh coverage saved: {crawled_count}")
+            print(f"  - Stale skipped: {stale_count}")
+            print(f"  - Failed: {failed_count}")
+            print(f"  - Already processed: {skipped_count}")
             print(f"  - Total saved: {len(records)}")
             print(f"  - Output: {OUTPUT_FILE.resolve()}")
             return 0
@@ -212,6 +291,46 @@ def crawl_thread(
     driver.get(url)
     time.sleep(4)
 
+    # Peek publish time before spending the reply-scroll budget.
+    early_html = driver.page_source
+    created_dt = extract_unix_create_time_from_html(early_html)
+    if created_dt is None:
+        try:
+            label = driver.execute_script(
+                """
+                const t = document.querySelector('time[datetime], time');
+                if (!t) return '';
+                return t.getAttribute('datetime') || t.getAttribute('title') || t.innerText || '';
+                """
+            )
+            from social_listening.crawl_freshness import parse_content_timestamp
+            from social_listening.review_utils import parse_facebook_datetime_label
+
+            created_dt = parse_content_timestamp(label)
+            if created_dt is None and label:
+                created_dt = parse_facebook_datetime_label(str(label))
+        except Exception:
+            created_dt = None
+
+    created_time = created_dt.isoformat() if created_dt else ""
+    freshness = classify_detail_freshness(created_time, POLICY)
+    if freshness == "stale":
+        return {
+            "keyword": search_keyword,
+            "keywords": search_keywords,
+            "url": url,
+            "current_url": driver.current_url or url,
+            "created_time": created_time,
+            "timestamp": created_time,
+            "freshness": "stale",
+            "stale": True,
+            "coverage": False,
+            "matched": False,
+            "articles": [],
+            "comments_crawled": 0,
+            "raw_html": "",
+        }
+
     last_height = 0
     idle_rounds = 0
     for _ in range(MAX_SCROLL_ROUNDS_PER_THREAD):
@@ -232,6 +351,8 @@ def crawl_thread(
     matched_on = set()
 
     for index, article in enumerate(articles):
+        if MAX_REPLIES > 0 and index > MAX_REPLIES:
+            break
         text = normalize_text(article.text)
         if not text:
             continue
@@ -261,11 +382,18 @@ def crawl_thread(
         "url": url,
         "current_url": current_url,
         "title": page_title,
+        "created_time": created_time,
+        "timestamp": created_time,
+        "freshness": freshness,
+        "coverage": True,
+        "stale": False,
         "matched": bool(matched_on),
         "matched_on": sorted(matched_on),
         "matched_terms": page_matches,
         "body_text": body_text,
         "articles": article_payloads,
+        "comments_found": max(0, len(article_payloads) - 1),
+        "comments_crawled": max(0, len(article_payloads) - 1),
         "linked_threads": canonical_urls,
         "raw_html": page_source,
     }

@@ -135,6 +135,27 @@ DEFAULT_PLATFORMS = [
 ]
 
 
+def stage_timeout_seconds(stage_name: str, script_path: str) -> int:
+    """
+    Per-stage timeout so one stuck crawler cannot block continuous forever.
+
+    Env:
+      PIPELINE_STAGE_TIMEOUT_SECONDS — default for all stages (default 3600)
+      PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS — crawl stages override (default 3600)
+      PIPELINE_FORMAT_STAGE_TIMEOUT_SECONDS — format/filter/import (default 1800)
+    """
+    default_all = int(os.getenv("PIPELINE_STAGE_TIMEOUT_SECONDS", "3600") or "3600")
+    crawl_default = int(os.getenv("PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS", str(default_all)) or default_all)
+    format_default = int(os.getenv("PIPELINE_FORMAT_STAGE_TIMEOUT_SECONDS", "1800") or "1800")
+
+    lower = f"{stage_name} {script_path}".lower()
+    if any(token in lower for token in ("crawl", "search", "raw_runner", "video_runner", "post_runner", "replies")):
+        return max(60, crawl_default)
+    if any(token in lower for token in ("format", "filter", "import", "postgres")):
+        return max(60, format_default)
+    return max(60, default_all)
+
+
 class PipelineRunner:
     def __init__(self, platform: str, args: argparse.Namespace):
         self.platform = platform
@@ -190,7 +211,7 @@ class PipelineRunner:
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=10800,  # 3 hour timeout (detail crawl needs more than 1h)
+                timeout=stage_timeout_seconds(stage_name, script_path),
                 env={
                     **os.environ,
                     "PYTHONPATH": str(PROJECT_ROOT / "src"),
@@ -208,11 +229,17 @@ class PipelineRunner:
                 self.log(f"{stage_name}: Failed with exit code {result.returncode}", "ERROR")
                 if result.stderr:
                     print(f"    Error output: {result.stderr[:500]}")
+                if result.stdout:
+                    # Surface last lines so hung/stale crawls leave evidence
+                    tail = "\n".join((result.stdout or "").splitlines()[-20:])
+                    if tail.strip():
+                        print(f"    Stdout tail:\n{tail}")
                 self.stats["failed"].append(stage_name)
                 return False
 
         except subprocess.TimeoutExpired:
-            self.log(f"{stage_name}: Timed out after 3 hours", "ERROR")
+            timeout_s = stage_timeout_seconds(stage_name, script_path)
+            self.log(f"{stage_name}: Timed out after {timeout_s}s", "ERROR")
             self.stats["failed"].append(stage_name)
             return False
         except Exception as exc:

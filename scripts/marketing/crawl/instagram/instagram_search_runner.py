@@ -28,18 +28,21 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.film_paths import platform_raw_dir
-from social_listening.paths import DATA_DIR, ensure_dir
+from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
 
 
 INSTAGRAM_SEARCH_URL = "https://www.instagram.com/explore/search/keyword/?q={query}"
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
-MAX_POSTS = 100
-MAX_SCROLL_ROUNDS = 120
-IDLE_ROUNDS_BEFORE_STOP = 8
-SCROLL_PAUSE_SECONDS = 2.5
-MAX_RUNTIME_SECONDS = 420
+POLICY = load_freshness_policy("instagram")
+MAX_POSTS = POLICY.max_new_urls_per_keyword
+MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
+IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
+SCROLL_PAUSE_SECONDS = float(os.getenv("INSTAGRAM_SCROLL_PAUSE_SECONDS", "2.5"))
+MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
+KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 
 
@@ -49,13 +52,22 @@ def main() -> int:
         raise RuntimeError("No search terms found in shared keyword config")
 
     with IncrementalCrawlState() as state:
-        is_initial = state.is_initial_run("instagram")
+        is_initial = state.is_initial_run("instagram") and state.is_initial_run("instagram_detail")
         run_type = "initial" if is_initial else "incremental"
-        existing_urls = state.get_existing_urls("instagram")
+        existing_urls = state.get_known_urls("instagram", "instagram_detail")
 
         print(f"[instagram-search] Run type: {run_type}")
         print(f"[instagram-search] Keywords: {len(search_terms)}")
         print(f"[instagram-search] Existing URLs: {len(existing_urls)}")
+        print(
+            f"[instagram-search] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"max_new={MAX_POSTS} scroll={MAX_SCROLL_ROUNDS} "
+            f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
+        )
+        print(
+            "[instagram-search] Note: search ranking is NOT assumed chronological; "
+            "no early-stop on consecutive previously-seen URLs"
+        )
 
         run_id = state.start_run("instagram", run_type)
 
@@ -64,94 +76,37 @@ def main() -> int:
             new_results: list[dict] = []
             global_seen: set[str] = set()
             urls_discovered = 0
-            max_consecutive_old = 999 if is_initial else 10
+            urls_new = 0
 
             for index, keyword in enumerate(search_terms, start=1):
                 print(f"[instagram-search] {index}/{len(search_terms)} keyword={keyword}")
-                driver.get(INSTAGRAM_SEARCH_URL.format(query=quote(keyword)))
-                time.sleep(6)
-                started_at = time.monotonic()
+                try:
+                    search_result = search_posts_for_keyword(driver, keyword, existing_urls)
+                except Exception as exc:
+                    print(f"[instagram-search] skip keyword={keyword} error={exc}")
+                    continue
 
-                urls: list[str] = []
-                local_seen: set[str] = set()
-                all_discovered: list[str] = []
-                idle_rounds = 0
-                consecutive_old = 0
-                scroll_rounds = 0
-
-                for _ in range(MAX_SCROLL_ROUNDS):
-                    scroll_rounds += 1
-
-                    if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
-                        print(f"[instagram-search] keyword={keyword} stopped: runtime_limit")
-                        break
-
-                    before_count = len(urls)
-
-                    for anchor in driver.find_elements(By.TAG_NAME, "a"):
-                        href = (anchor.get_attribute("href") or "").strip()
-                        normalized = normalize_instagram_post_url(href)
-                        if not normalized or normalized in local_seen:
-                            continue
-
-                        local_seen.add(normalized)
-                        all_discovered.append(normalized)
-
-                        # Check if already crawled
-                        if normalized in existing_urls:
-                            consecutive_old += 1
-                        else:
-                            consecutive_old = 0
-                            urls.append(normalized)
-
-                        # Early stop for incremental
-                        if not is_initial and consecutive_old >= max_consecutive_old:
-                            print(
-                                f"[instagram-search] keyword={keyword} early stop: "
-                                f"hit {consecutive_old} old URLs"
-                            )
-                            break
-
-                        if len(urls) >= MAX_POSTS:
-                            break
-
-                    if len(urls) >= MAX_POSTS:
-                        break
-
-                    # Early stop check at round level too
-                    if not is_initial and consecutive_old >= max_consecutive_old:
-                        break
-
-                    idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-                    if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
-                        print(f"[instagram-search] keyword={keyword} stopped: idle_limit")
-                        break
-
-                    # Progress logging
-                    if scroll_rounds % 20 == 0:
-                        print(
-                            f"[instagram-search] keyword={keyword} round={scroll_rounds} "
-                            f"new_urls={len(urls)} discovered={len(all_discovered)} "
-                            f"consecutive_old={consecutive_old}"
-                        )
-
-                    scroll_search_results(driver)
-                    time.sleep(SCROLL_PAUSE_SECONDS)
-
-                urls_discovered += len(urls)
+                stats: KeywordCrawlStats = search_result["stats"]
+                stats.log("instagram-search")
+                urls = search_result["urls"]
+                urls_discovered += stats.discovered
+                urls_new += len(urls)
 
                 if not urls:
-                    print(f"[instagram-search] No new URLs for keyword={keyword}")
                     continue
 
                 for url in urls:
                     if url in global_seen:
                         continue
                     global_seen.add(url)
-                    new_results.append({"keyword": keyword, "url": url, "status": "ok"})
-                    state.mark_crawled(url, "instagram", keyword)
+                    new_results.append({
+                        "keyword": keyword,
+                        "url": url,
+                        "status": search_result["status"],
+                        "reason": search_result.get("reason", ""),
+                        "pending_detail": True,
+                    })
 
-            # Merge with existing results
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
             merged_results = merge_results(existing_results, new_results)
@@ -164,22 +119,101 @@ def main() -> int:
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
-                urls_crawled=len(new_results),
+                urls_crawled=0,
                 urls_skipped=len(existing_urls),
-                keywords_processed=len(search_terms)
+                keywords_processed=len(search_terms),
             )
 
             print(f"[instagram-search] Summary:")
-            print(f"  - New URLs discovered: {urls_discovered}")
-            print(f"  - Total URLs in state: {len(existing_urls) + urls_discovered}")
+            print(f"  - Discovered (all keywords): {urls_discovered}")
+            print(f"  - New URLs queued for detail: {urls_new}")
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
             return 0
         finally:
             driver.quit()
 
 
+def search_posts_for_keyword(
+    driver: webdriver.Chrome,
+    keyword: str,
+    existing_urls: set[str],
+) -> dict:
+    driver.get(INSTAGRAM_SEARCH_URL.format(query=quote(keyword)))
+    time.sleep(6)
+    started_at = time.monotonic()
+
+    urls: list[str] = []
+    local_seen: set[str] = set()
+    all_discovered: list[str] = []
+    idle_rounds = 0
+    already_seen = 0
+    scroll_rounds = 0
+    stop_reason = "scroll_exhausted"
+
+    for _ in range(MAX_SCROLL_ROUNDS):
+        scroll_rounds += 1
+        elapsed = time.monotonic() - started_at
+
+        if elapsed >= KEYWORD_RUNTIME_SECONDS:
+            stop_reason = "keyword_runtime_limit"
+            break
+        if elapsed >= MAX_RUNTIME_SECONDS:
+            stop_reason = "runtime_limit"
+            break
+
+        before_count = len(urls)
+
+        for anchor in driver.find_elements(By.TAG_NAME, "a"):
+            href = (anchor.get_attribute("href") or "").strip()
+            normalized = normalize_instagram_post_url(href)
+            if not normalized or normalized in local_seen:
+                continue
+
+            local_seen.add(normalized)
+            all_discovered.append(normalized)
+
+            if normalized in existing_urls:
+                already_seen += 1
+                continue
+
+            urls.append(normalized)
+            if len(urls) >= MAX_POSTS:
+                stop_reason = "max_posts_reached"
+                break
+
+        if stop_reason == "max_posts_reached":
+            break
+
+        idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
+        if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
+            stop_reason = "idle_limit"
+            break
+
+        if scroll_rounds % 20 == 0:
+            print(
+                f"[instagram-search] keyword={keyword} round={scroll_rounds} "
+                f"new_urls={len(urls)} discovered={len(all_discovered)} "
+                f"already_seen={already_seen}"
+            )
+
+        scroll_search_results(driver)
+        time.sleep(SCROLL_PAUSE_SECONDS)
+
+    stats = KeywordCrawlStats(
+        keyword=keyword,
+        discovered=len(all_discovered),
+        new=len(urls),
+        already_seen=already_seen,
+        runtime_seconds=time.monotonic() - started_at,
+        stop_reason=stop_reason,
+    )
+    status = "ok" if urls else ("partial" if all_discovered else "no_results")
+    if stop_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
+        status = "partial"
+    return {"urls": urls, "status": status, "reason": stop_reason, "stats": stats}
+
+
 def load_existing_results() -> list[dict]:
-    """Load existing search results"""
     if not OUTPUT_FILE.exists():
         return []
     try:
@@ -191,7 +225,6 @@ def load_existing_results() -> list[dict]:
 
 
 def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
-    """Merge and deduplicate results by URL"""
     by_url: dict[str, dict] = {}
     for item in existing:
         url = item.get("url", "")

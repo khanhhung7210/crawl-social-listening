@@ -46,6 +46,8 @@ def main() -> int:
 
 
 def parse_video_record(item: dict) -> dict:
+    if item.get("stale") or item.get("coverage") is False or item.get("freshness") == "stale":
+        return {}
     html = str(item.get("raw_html") or "")
     page_data = extract_page_data(html)
     if not page_data:

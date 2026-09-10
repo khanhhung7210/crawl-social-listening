@@ -48,6 +48,8 @@ def main() -> int:
 
 
 def parse_post_record(item: dict) -> dict:
+    if item.get("stale") or item.get("coverage") is False or item.get("freshness") == "stale":
+        return {}
     html = str(item.get("raw_html") or "")
     metadata = extract_page_metadata(html)
     post_url = normalize_instagram_post_url(str(item.get("current_url") or item.get("url") or ""))

@@ -9,12 +9,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -29,19 +26,22 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.film_paths import platform_raw_dir
-from social_listening.paths import DATA_DIR, ensure_dir
+from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import build_debugger_driver
+from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
 
 
 TIKTOK_SEARCH_URL = "https://www.tiktok.com/search/video?q={query}"
 DEBUGGER_ADDRESS = os.getenv("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9223")
-MAX_VIDEOS = 200
-MAX_SCROLL_ROUNDS = 240
-IDLE_ROUNDS_BEFORE_STOP = 8
-MAX_EMPTY_ROUNDS_BEFORE_SKIP = 5
-SCROLL_PAUSE_SECONDS = 2.5
-MAX_RUNTIME_SECONDS = 600
+POLICY = load_freshness_policy("tiktok")
+MAX_VIDEOS = POLICY.max_new_urls_per_keyword
+MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
+IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
+MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
+SCROLL_PAUSE_SECONDS = float(os.getenv("TIKTOK_SCROLL_PAUSE_SECONDS", "2.5"))
+MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
+KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("tiktok") / "tiktok_search_results.json"
 
 
@@ -51,13 +51,23 @@ def main() -> int:
         raise RuntimeError("No search terms found in shared keyword config")
 
     with IncrementalCrawlState() as state:
-        is_initial = state.is_initial_run("tiktok")
+        is_initial = state.is_initial_run("tiktok") and state.is_initial_run("tiktok_detail")
         run_type = "initial" if is_initial else "incremental"
-        existing_urls = state.get_existing_urls("tiktok")
+        # Dedup against both search-era and detail-era marks; do NOT mark at search time.
+        existing_urls = state.get_known_urls("tiktok", "tiktok_detail")
 
         print(f"[tiktok-search] Run type: {run_type}")
         print(f"[tiktok-search] Keywords: {len(search_terms)}")
         print(f"[tiktok-search] Existing URLs: {len(existing_urls)}")
+        print(
+            f"[tiktok-search] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"max_new={MAX_VIDEOS} scroll={MAX_SCROLL_ROUNDS} "
+            f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
+        )
+        print(
+            "[tiktok-search] Note: search ranking is NOT assumed chronological; "
+            "no early-stop on consecutive previously-seen URLs"
+        )
 
         run_id = state.start_run("tiktok", run_type)
 
@@ -66,23 +76,25 @@ def main() -> int:
             new_results: list[dict] = []
             global_seen: set[str] = set()
             urls_discovered = 0
-            max_consecutive_old = 999 if is_initial else 10
+            urls_new = 0
 
             for index, keyword in enumerate(search_terms, start=1):
                 print(f"[tiktok-search] {index}/{len(search_terms)} keyword={keyword}")
                 try:
                     search_result = search_videos_for_keyword_incremental(
-                        driver, keyword, existing_urls, is_initial, max_consecutive_old
+                        driver, keyword, existing_urls
                     )
                 except Exception as exc:
                     print(f"[tiktok-search] skip keyword={keyword} error={exc}")
                     continue
 
+                stats: KeywordCrawlStats = search_result["stats"]
+                stats.log("tiktok-search")
                 urls = search_result["urls"]
-                urls_discovered += len(urls)
+                urls_discovered += stats.discovered
+                urls_new += len(urls)
 
                 if not urls:
-                    print(f"[tiktok-search] No new URLs for keyword={keyword}")
                     continue
 
                 for url in urls:
@@ -93,11 +105,11 @@ def main() -> int:
                         "keyword": keyword,
                         "url": url,
                         "status": search_result["status"],
-                        "reason": search_result.get("reason", "")
+                        "reason": search_result.get("reason", ""),
+                        # Not marked in crawl_state until detail confirms freshness.
+                        "pending_detail": True,
                     })
-                    state.mark_crawled(url, "tiktok", keyword)
 
-            # Merge with existing
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
             merged = merge_results(existing_results, new_results)
@@ -110,14 +122,14 @@ def main() -> int:
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
-                urls_crawled=len(new_results),
+                urls_crawled=0,  # detail stage owns successful crawl marks
                 urls_skipped=len(existing_urls),
-                keywords_processed=len(search_terms)
+                keywords_processed=len(search_terms),
             )
 
             print(f"[tiktok-search] Summary:")
-            print(f"  - New URLs discovered: {urls_discovered}")
-            print(f"  - Total URLs in state: {len(existing_urls) + urls_discovered}")
+            print(f"  - Discovered (all keywords): {urls_discovered}")
+            print(f"  - New URLs queued for detail: {urls_new}")
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
             return 0
         finally:
@@ -128,10 +140,8 @@ def search_videos_for_keyword_incremental(
     driver: webdriver.Chrome,
     keyword: str,
     existing_urls: set[str],
-    is_initial: bool,
-    max_consecutive_old: int
 ) -> dict:
-    """Incremental search with early stop"""
+    """Scroll until idle/empty/safety limits. Never stop on consecutive old URLs alone."""
     driver.get(TIKTOK_SEARCH_URL.format(query=quote(keyword)))
     time.sleep(5)
     started_at = time.monotonic()
@@ -141,15 +151,20 @@ def search_videos_for_keyword_incremental(
     all_discovered: list[str] = []
     idle_rounds = 0
     empty_rounds = 0
-    consecutive_old = 0
+    already_seen = 0
     scroll_rounds = 0
+    stop_reason = "scroll_exhausted"
 
     for _ in range(MAX_SCROLL_ROUNDS):
         scroll_rounds += 1
+        elapsed = time.monotonic() - started_at
 
-        if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
-            print(f"[tiktok-search] keyword={keyword} stopped: runtime_limit")
-            return {"urls": urls, "status": "partial" if urls else "no_results", "reason": "runtime_limit"}
+        if elapsed >= KEYWORD_RUNTIME_SECONDS:
+            stop_reason = "keyword_runtime_limit"
+            break
+        if elapsed >= MAX_RUNTIME_SECONDS:
+            stop_reason = "runtime_limit"
+            break
 
         before_count = len(urls)
 
@@ -162,39 +177,50 @@ def search_videos_for_keyword_incremental(
             all_discovered.append(normalized)
 
             if normalized in existing_urls:
-                consecutive_old += 1
-            else:
-                consecutive_old = 0
-                urls.append(normalized)
+                already_seen += 1
+                continue
 
-            # Early stop for incremental
-            if not is_initial and consecutive_old >= max_consecutive_old:
-                print(f"[tiktok-search] keyword={keyword} early stop: hit {consecutive_old} old URLs")
-                return {"urls": urls, "status": "ok" if urls else "no_results", "reason": "early_stop_old_urls"}
-
+            urls.append(normalized)
             if len(urls) >= MAX_VIDEOS:
-                print(f"[tiktok-search] keyword={keyword} stopped: max_videos")
-                return {"urls": urls, "status": "ok", "reason": "max_videos_reached"}
+                stop_reason = "max_videos_reached"
+                break
+
+        if stop_reason == "max_videos_reached":
+            break
 
         idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-        empty_rounds = empty_rounds + 1 if not urls else 0
+        empty_rounds = empty_rounds + 1 if not urls and not already_seen else 0
 
         if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
-            print(f"[tiktok-search] keyword={keyword} stopped: idle_limit")
-            return {"urls": urls, "status": "partial" if urls else "no_results", "reason": "idle_limit"}
+            stop_reason = "idle_limit"
+            break
 
         if empty_rounds >= MAX_EMPTY_ROUNDS_BEFORE_SKIP:
-            print(f"[tiktok-search] keyword={keyword} stopped: empty_limit")
-            return {"urls": urls, "status": "no_results", "reason": "empty_limit"}
+            stop_reason = "empty_limit"
+            break
 
-        # Progress logging
         if scroll_rounds % 20 == 0:
-            print(f"[tiktok-search] keyword={keyword} round={scroll_rounds} new_urls={len(urls)} discovered={len(all_discovered)} consecutive_old={consecutive_old}")
+            print(
+                f"[tiktok-search] keyword={keyword} round={scroll_rounds} "
+                f"new_urls={len(urls)} discovered={len(all_discovered)} "
+                f"already_seen={already_seen}"
+            )
 
         scroll_search_results(driver)
         time.sleep(SCROLL_PAUSE_SECONDS)
 
-    return {"urls": urls, "status": "ok" if urls else "no_results", "reason": "scroll_exhausted"}
+    stats = KeywordCrawlStats(
+        keyword=keyword,
+        discovered=len(all_discovered),
+        new=len(urls),
+        already_seen=already_seen,
+        runtime_seconds=time.monotonic() - started_at,
+        stop_reason=stop_reason,
+    )
+    status = "ok" if urls else ("partial" if all_discovered else "no_results")
+    if stop_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
+        status = "partial"
+    return {"urls": urls, "status": status, "reason": stop_reason, "stats": stats}
 
 
 def load_existing_results() -> list[dict]:

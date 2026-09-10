@@ -92,6 +92,8 @@ def main() -> int:
 
 
 def parse_thread_record(item: dict, film_title: str, keywords: list[str]) -> dict:
+    if item.get("stale") or item.get("coverage") is False or item.get("freshness") == "stale":
+        return {}
     body_text = str(item.get("body_text") or "")
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     if len(lines) < 5:

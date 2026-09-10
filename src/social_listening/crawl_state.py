@@ -8,9 +8,12 @@ Tracks:
 - Last run times per platform
 
 Enables:
-- Early stopping when hitting old content
-- Incremental crawls (only fetch new data)
+- Incremental crawls (only fetch new URLs)
 - Deduplication across keywords
+- Content-timestamp freshness decisions (see crawl_freshness.py)
+
+Note: Search rankings are NOT chronological. Do not stop scrolling solely
+because previously seen URLs appeared consecutively.
 """
 
 from __future__ import annotations
@@ -126,32 +129,53 @@ class IncrementalCrawlState:
         window: int = 10
     ) -> bool:
         """
-        Determine if search should stop (hit old content).
+        DEPRECATED / unsafe for non-chronological search.
 
-        Args:
-            platform: Platform being crawled
-            recent_urls: Last N URLs discovered in current scroll
-            threshold: How many old URLs to trigger stop (default: 8)
-            window: Window size to check (default: 10, check last 10 URLs)
+        Previously stopped when recent_urls were already in crawl_state. Search
+        rankings are not chronological, so consecutive previously-seen URLs do
+        NOT imply a freshness boundary. Always returns False.
 
-        Returns:
-            True if should stop scrolling
+        Use crawl_freshness.should_stop_for_validated_stale_content() with real
+        content timestamps instead.
         """
-        if len(recent_urls) < window:
-            return False
+        return False
 
-        # Check last `window` URLs
-        check_urls = recent_urls[-window:]
+    def get_urls_with_content_timestamp(
+        self,
+        platform: str,
+        *,
+        since: Optional[datetime] = None,
+    ) -> dict[str, Optional[datetime]]:
+        """Return url -> content_timestamp for a platform (None if unknown)."""
+        query = """
+            SELECT url, content_timestamp
+            FROM crawled_urls
+            WHERE platform = ?
+        """
+        params: list = [platform]
+        if since:
+            query += " AND first_crawled_at >= ?"
+            params.append(since.isoformat())
+        cursor = self.conn.execute(query, params)
+        out: dict[str, Optional[datetime]] = {}
+        for row in cursor.fetchall():
+            ts = row[1]
+            if ts:
+                try:
+                    out[row[0]] = datetime.fromisoformat(ts)
+                except ValueError:
+                    out[row[0]] = None
+            else:
+                out[row[0]] = None
+        return out
 
-        # Count how many are already crawled
-        placeholders = ",".join("?" * len(check_urls))
-        cursor = self.conn.execute(
-            f"SELECT COUNT(*) FROM crawled_urls WHERE platform = ? AND url IN ({placeholders})",
-            [platform] + check_urls
-        )
-        old_count = cursor.fetchone()[0]
-
-        return old_count >= threshold
+    def get_known_urls(self, *platforms: str) -> set[str]:
+        """Union of crawled URLs across one or more platform keys."""
+        known: set[str] = set()
+        for platform in platforms:
+            if platform:
+                known |= self.get_existing_urls(platform)
+        return known
 
     def get_last_run_time(self, platform: str) -> Optional[datetime]:
         """Get timestamp of last successful run for platform"""

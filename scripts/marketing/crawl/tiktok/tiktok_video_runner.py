@@ -33,6 +33,13 @@ from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import build_debugger_chrome
+from social_listening.crawl_freshness import (
+    KeywordCrawlStats,
+    classify_detail_freshness,
+    extract_unix_create_time_from_html,
+    load_freshness_policy,
+    should_stop_keyword_details,
+)
 
 DEBUGGER_ADDRESS = os.getenv("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9223")
 VIDEO_URL = ""
@@ -42,13 +49,18 @@ LEGACY_FILTERED_INPUT_FILE = DATA_DIR / "tiktok" / "raw" / "tiktok_search_result
 LEGACY_INPUT_FILE = DATA_DIR / "tiktok" / "raw" / "tiktok_search_results.json"
 SCROLL_SECONDS_PER_VIDEO = 8
 OUTPUT_FILE = platform_raw_dir("tiktok") / "tiktok_all_videos.json"
-COMMENT_IDLE_ROUNDS_BEFORE_STOP = 6
-MAX_COMMENT_SCROLL_ROUNDS = 80
+POLICY = load_freshness_policy("tiktok")
+COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
+MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
+MAX_COMMENTS = POLICY.max_comments
 INITIAL_VIDEO_WAIT_SECONDS = float(os.getenv("TIKTOK_INITIAL_VIDEO_WAIT_SECONDS", "6"))
 CAPTCHA_WAIT_SECONDS = float(os.getenv("TIKTOK_CAPTCHA_WAIT_SECONDS", "20"))
 COMMENT_PANEL_WAIT_SECONDS = float(os.getenv("TIKTOK_COMMENT_PANEL_WAIT_SECONDS", "2.5"))
 COMMENT_SCROLL_PAUSE_SECONDS = float(os.getenv("TIKTOK_COMMENT_SCROLL_PAUSE_SECONDS", "2.8"))
 DEBUG_COMMENTS = str(os.getenv("TIKTOK_DEBUG_COMMENTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+DETAIL_KEYWORD_RUNTIME_SECONDS = int(
+    os.getenv("TIKTOK_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
+)
 
 
 def main() -> int:
@@ -78,10 +90,19 @@ def main() -> int:
     with IncrementalCrawlState() as state:
         run_id = state.start_run("tiktok_detail", "incremental")
         urls_crawled = 0
+        urls_stale = 0
+        urls_failed = 0
         urls_skipped = len(completed_urls)
+        stale_by_keyword: dict[str, int] = {}
+        started_by_keyword: dict[str, float] = {}
+        stats_by_keyword: dict[str, KeywordCrawlStats] = {}
 
         print(f"[tiktok-detail] URLs to crawl: {len(pending_urls)}")
         print(f"[tiktok-detail] URLs skipped: {urls_skipped}")
+        print(
+            f"[tiktok-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"max_comment_scroll={MAX_COMMENT_SCROLL_ROUNDS} max_comments={MAX_COMMENTS}"
+        )
 
         driver = build_driver()
         try:
@@ -89,13 +110,19 @@ def main() -> int:
             for index, item in enumerate(pending_urls, start=1):
                 url = item["url"]
                 keyword = item["keyword"]
+                kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
+                started_by_keyword.setdefault(keyword, time.monotonic())
+
+                if should_stop_keyword_details(stale_by_keyword.get(keyword, 0), POLICY):
+                    print(f"[tiktok-detail] skip remaining for keyword={keyword}: max_stale_details")
+                    continue
+                if time.monotonic() - started_by_keyword[keyword] >= DETAIL_KEYWORD_RUNTIME_SECONDS:
+                    print(f"[tiktok-detail] skip remaining for keyword={keyword}: keyword_runtime_limit")
+                    continue
+
                 try:
                     record = crawl_video(driver, url, keyword, search_terms)
-                    # Extract timestamp if available
-                    content_timestamp = record.get("created_time") or record.get("crawled_at")
-                    state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
-                    urls_crawled += 1
-                except (InvalidSessionIdException, WebDriverException) as exc:
+                except (InvalidSessionIdException, WebDriverException):
                     try:
                         driver.quit()
                     except Exception:
@@ -103,15 +130,13 @@ def main() -> int:
                     driver = build_driver()
                     try:
                         record = crawl_video(driver, url, keyword, search_terms)
-                        content_timestamp = record.get("created_time") or record.get("crawled_at")
-                        state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
-                        urls_crawled += 1
                     except Exception as retry_exc:
                         record = {
                             "keyword": keyword,
                             "url": url,
                             "matched": False,
                             "error": str(retry_exc),
+                            "freshness": "unknown",
                         }
                 except Exception as exc:
                     record = {
@@ -119,20 +144,77 @@ def main() -> int:
                         "url": url,
                         "matched": False,
                         "error": str(exc),
+                        "freshness": "unknown",
                     }
+
+                if record.get("error"):
+                    urls_failed += 1
+                    kw_stats.detail_failed += 1
+                    records = merge_record(records, record)
+                    save_records(output_path, records)
+                    print(f"[{index}/{total}] failed {url}")
+                    continue
+
+                # Prefer real publish time; never treat crawl clock as content time for coverage.
+                content_timestamp = record.get("created_time")
+                freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
+                record["freshness"] = freshness
+
+                # Mark search+detail keys so next search does not requeue; stale still marked.
+                state.mark_crawled(url, "tiktok", keyword, content_timestamp)
+                state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
+
+                kw_stats.comments_found += int(record.get("comments_found") or 0)
+                kw_stats.comments_crawled += int(record.get("comments_crawled") or 0)
+
+                if freshness == "stale":
+                    urls_stale += 1
+                    kw_stats.stale += 1
+                    stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
+                    # Persist a lightweight skip marker so we do not re-detail; not coverage.
+                    skip_record = {
+                        "keyword": keyword,
+                        "url": url,
+                        "freshness": "stale",
+                        "stale": True,
+                        "coverage": False,
+                        "created_time": content_timestamp,
+                        "crawled_at": record.get("crawled_at"),
+                        "comments_crawled": 0,
+                        "crawled_comments": [],
+                    }
+                    records = merge_record(records, skip_record)
+                    save_records(output_path, records)
+                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
+                    continue
+
+                urls_crawled += 1
+                kw_stats.detail_success += 1
                 records = merge_record(records, record)
                 save_records(output_path, records)
-                print(f"[{index}/{total}] saved {url}")
+                print(
+                    f"[{index}/{total}] saved {url} freshness={freshness} "
+                    f"comments_crawled={record.get('comments_crawled', 0)}"
+                )
+
+            for kw, kw_stats in stats_by_keyword.items():
+                kw_stats.runtime_seconds = time.monotonic() - started_by_keyword.get(kw, time.monotonic())
+                kw_stats.log("tiktok-detail")
 
             state.complete_run(
                 run_id,
                 urls_discovered=len(video_urls),
                 urls_crawled=urls_crawled,
-                urls_skipped=urls_skipped,
-                keywords_processed=len(set(item["keyword"] for item in video_urls))
+                urls_skipped=urls_skipped + urls_stale,
+                keywords_processed=len(set(item["keyword"] for item in video_urls)),
             )
 
-            print(f"saved {len(records)} total video payloads to {output_path.resolve()}")
+            print(f"[tiktok-detail] Summary:")
+            print(f"  - Fresh coverage saved: {urls_crawled}")
+            print(f"  - Stale skipped: {urls_stale}")
+            print(f"  - Failed: {urls_failed}")
+            print(f"  - Total records: {len(records)}")
+            print(f"  - Output: {output_path.resolve()}")
             return 0
         finally:
             driver.quit()
@@ -202,6 +284,9 @@ def collect_completed_video_urls(records: list[dict]) -> set[str]:
 def should_retry_record(item: dict) -> bool:
     if not isinstance(item, dict):
         return True
+    # Stale skip markers are terminal — do not re-detail as coverage.
+    if item.get("stale") or item.get("freshness") == "stale" or item.get("coverage") is False:
+        return False
     if item.get("raw_html") and item.get("current_url"):
         return False
     return bool(item.get("error"))
@@ -304,7 +389,15 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     matched_terms = [term for term in search_terms if contains_keyword(normalize_text(body_text), term)]
     matched = bool(matched_terms)
 
-    comments = crawl_comments(driver)
+    created_dt = extract_unix_create_time_from_html(page_source)
+    created_time = created_dt.isoformat() if created_dt else ""
+    freshness = classify_detail_freshness(created_time, POLICY)
+
+    comments: list[dict] = []
+    if freshness != "stale":
+        comments = crawl_comments(driver)
+        if MAX_COMMENTS > 0:
+            comments = comments[:MAX_COMMENTS]
 
     return {
         "keyword": keyword,
@@ -312,12 +405,18 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
         "current_url": current_url,
         "title": page_title,
         "crawled_at": crawled_at,
+        "created_time": created_time,
+        "freshness": freshness,
+        "coverage": freshness != "stale",
+        "stale": freshness == "stale",
         "matched": matched,
         "matched_terms": matched_terms,
         "comment_count_observed": len(comments),
+        "comments_found": len(comments),
+        "comments_crawled": len(comments),
         "crawled_comments": comments,
         "body_text": body_text,
-        "raw_html": page_source,
+        "raw_html": page_source if freshness != "stale" else "",
         "linked_videos": sorted(set(re.findall(r"https://www\.tiktok\.com/@[^/]+/video/\d+", page_source))),
     }
 
@@ -383,7 +482,13 @@ def crawl_comments(driver: webdriver.Chrome) -> list[dict]:
         if idle_rounds >= COMMENT_IDLE_ROUNDS_BEFORE_STOP:
             break
 
-    return list(comments.values())
+        if MAX_COMMENTS > 0 and len(comments) >= MAX_COMMENTS:
+            break
+
+    values = list(comments.values())
+    if MAX_COMMENTS > 0:
+        return values[:MAX_COMMENTS]
+    return values
 
 from selenium.webdriver.common.action_chains import ActionChains
 

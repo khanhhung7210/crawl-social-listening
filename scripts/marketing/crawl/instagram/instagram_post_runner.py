@@ -32,6 +32,13 @@ from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.instagram_comment_parser import extract_instagram_comments_from_body_text
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import (
+    KeywordCrawlStats,
+    classify_detail_freshness,
+    extract_unix_create_time_from_html,
+    load_freshness_policy,
+    should_stop_keyword_details,
+)
 
 
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
@@ -39,9 +46,14 @@ POST_URL = ""
 INPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_all_posts.json"
 SCROLL_SECONDS_PER_POST = 8
-COMMENT_IDLE_ROUNDS_BEFORE_STOP = 6
-MAX_COMMENT_SCROLL_ROUNDS = 80
-COMMENT_SCROLL_PAUSE_SECONDS = 1.5
+POLICY = load_freshness_policy("instagram")
+COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
+MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
+MAX_COMMENTS = POLICY.max_comments
+COMMENT_SCROLL_PAUSE_SECONDS = float(os.getenv("INSTAGRAM_COMMENT_SCROLL_PAUSE_SECONDS", "1.5"))
+DETAIL_KEYWORD_RUNTIME_SECONDS = int(
+    os.getenv("INSTAGRAM_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
+)
 
 
 def main() -> int:
@@ -70,49 +82,110 @@ def main() -> int:
 
     with IncrementalCrawlState() as state:
         run_id = state.start_run("instagram_detail", "incremental")
+        stale_by_keyword: dict[str, int] = {}
+        started_by_keyword: dict[str, float] = {}
+        stats_by_keyword: dict[str, KeywordCrawlStats] = {}
 
         driver = build_driver()
         try:
             total = len(pending_urls)
             crawled_count = 0
+            stale_count = 0
+            failed_count = 0
+
+            print(
+                f"[instagram-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+                f"max_comment_scroll={MAX_COMMENT_SCROLL_ROUNDS} max_comments={MAX_COMMENTS}"
+            )
 
             for index, item in enumerate(pending_urls, start=1):
                 url = item["url"]
                 keyword = item["keyword"]
+                kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
+                started_by_keyword.setdefault(keyword, time.monotonic())
+
+                if should_stop_keyword_details(stale_by_keyword.get(keyword, 0), POLICY):
+                    print(f"[instagram-detail] skip remaining for keyword={keyword}: max_stale_details")
+                    continue
+                if time.monotonic() - started_by_keyword[keyword] >= DETAIL_KEYWORD_RUNTIME_SECONDS:
+                    print(f"[instagram-detail] skip remaining for keyword={keyword}: keyword_runtime_limit")
+                    continue
+
                 try:
                     record = crawl_post(driver, url, keyword, search_terms)
-                    crawled_count += 1
-
-                    # Extract timestamp if available
-                    content_timestamp = record.get("timestamp") or record.get("taken_at_timestamp")
-
-                    # Mark as crawled
-                    state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
-
                 except Exception as exc:
                     record = {
                         "keyword": keyword,
                         "url": url,
                         "matched": False,
                         "error": str(exc),
+                        "freshness": "unknown",
                     }
 
+                if record.get("error"):
+                    failed_count += 1
+                    kw_stats.detail_failed += 1
+                    records.append(record)
+                    save_records(OUTPUT_FILE, records)
+                    print(f"[{index}/{total}] failed {url}")
+                    continue
+
+                content_timestamp = record.get("created_time") or record.get("timestamp") or record.get("taken_at_timestamp")
+                freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
+                record["freshness"] = freshness
+
+                state.mark_crawled(url, "instagram", keyword, content_timestamp)
+                state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
+
+                kw_stats.comments_found += int(record.get("comments_found") or 0)
+                kw_stats.comments_crawled += int(record.get("comments_crawled") or 0)
+
+                if freshness == "stale":
+                    stale_count += 1
+                    kw_stats.stale += 1
+                    stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
+                    records.append(
+                        {
+                            "keyword": keyword,
+                            "url": url,
+                            "freshness": "stale",
+                            "stale": True,
+                            "coverage": False,
+                            "created_time": content_timestamp,
+                            "crawled_at": record.get("crawled_at"),
+                            "crawled_comments": [],
+                            "comments_crawled": 0,
+                        }
+                    )
+                    save_records(OUTPUT_FILE, records)
+                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
+                    continue
+
+                crawled_count += 1
+                kw_stats.detail_success += 1
                 records.append(record)
                 save_records(OUTPUT_FILE, records)
-                print(f"[{index}/{total}] saved {url}")
+                print(
+                    f"[{index}/{total}] saved {url} freshness={freshness} "
+                    f"comments_crawled={record.get('comments_crawled', 0)}"
+                )
 
-            # Complete run
+            for kw, kw_stats in stats_by_keyword.items():
+                kw_stats.runtime_seconds = time.monotonic() - started_by_keyword.get(kw, time.monotonic())
+                kw_stats.log("instagram-detail")
+
             state.complete_run(
                 run_id,
                 urls_discovered=len(post_urls),
                 urls_crawled=crawled_count,
-                urls_skipped=len(existing_urls),
-                keywords_processed=len(set(item.get("keyword", "") for item in post_urls))
+                urls_skipped=len(existing_urls) + stale_count,
+                keywords_processed=len(set(item.get("keyword", "") for item in post_urls)),
             )
 
             print(f"[instagram-detail] Summary:")
-            print(f"  - URLs crawled: {crawled_count}")
-            print(f"  - URLs skipped: {len(existing_urls)}")
+            print(f"  - Fresh coverage saved: {crawled_count}")
+            print(f"  - Stale skipped: {stale_count}")
+            print(f"  - Failed: {failed_count}")
             print(f"  - Total saved: {len(records)}")
             print(f"  - Output: {OUTPUT_FILE.resolve()}")
             return 0
@@ -207,8 +280,17 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
     current_url = normalize_instagram_post_url(driver.current_url or url) or url
     page_title = driver.title or ""
     crawled_at = datetime.now(timezone.utc).isoformat()
-    comments = crawl_comments(driver, current_url, body_text)
     matched_terms = [term for term in search_terms if contains_keyword(normalize_text(body_text), term)]
+
+    created_dt = extract_unix_create_time_from_html(page_source)
+    created_time = created_dt.isoformat() if created_dt else ""
+    freshness = classify_detail_freshness(created_time, POLICY)
+
+    comments: list[dict] = []
+    if freshness != "stale":
+        comments = crawl_comments(driver, current_url, body_text)
+        if MAX_COMMENTS > 0:
+            comments = comments[:MAX_COMMENTS]
 
     return {
         "keyword": keyword,
@@ -216,12 +298,20 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
         "current_url": current_url,
         "title": page_title,
         "crawled_at": crawled_at,
+        "created_time": created_time,
+        "timestamp": created_time,
+        "taken_at_timestamp": int(created_dt.timestamp()) if created_dt else None,
+        "freshness": freshness,
+        "coverage": freshness != "stale",
+        "stale": freshness == "stale",
         "matched": bool(matched_terms),
         "matched_terms": matched_terms,
         "comment_count_observed": len(comments),
+        "comments_found": len(comments),
+        "comments_crawled": len(comments),
         "crawled_comments": comments,
         "body_text": body_text,
-        "raw_html": page_source,
+        "raw_html": page_source if freshness != "stale" else "",
     }
 
 
@@ -272,8 +362,13 @@ def crawl_comments(driver: webdriver.Chrome, post_url: str, body_text: str) -> l
             idle_rounds += 1
         if idle_rounds >= COMMENT_IDLE_ROUNDS_BEFORE_STOP:
             break
+        if MAX_COMMENTS > 0 and len(comments) >= MAX_COMMENTS:
+            break
     if comments:
-        return list(comments.values())
+        values = list(comments.values())
+        if MAX_COMMENTS > 0:
+            return values[:MAX_COMMENTS]
+        return values
     return extract_instagram_comments_from_body_text(body_text, post_url)
 
 

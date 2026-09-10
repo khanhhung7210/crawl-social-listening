@@ -41,13 +41,13 @@ PLATFORMS = {
         "search_runner": "scripts/marketing/crawl/threads/threads_crawl_runner.py",
         "detail_runner": "scripts/marketing/crawl/threads/threads_replies_runner.py",
         "expected_speedup": 5.0,  # Expected speedup for incremental run
-        "supports_early_stop": True,
+        "supports_early_stop": False,  # search is non-chronological; URL early-stop removed
     },
     "instagram": {
         "search_runner": "scripts/marketing/crawl/instagram/instagram_search_runner.py",
         "detail_runner": "scripts/marketing/crawl/instagram/instagram_post_runner.py",
         "expected_speedup": 4.0,
-        "supports_early_stop": True,
+        "supports_early_stop": False,
     },
     "facebook": {
         "search_runner": "scripts/marketing/crawl/facebook/facebook_raw_runner.py",
@@ -60,8 +60,8 @@ PLATFORMS = {
         "search_runner": "scripts/marketing/crawl/tiktok/tiktok_search_runner.py",
         "detail_runner": "scripts/marketing/crawl/tiktok/tiktok_video_runner.py",
         "expected_speedup": 5.0,
-        "supports_early_stop": True,
-        "implemented": False,
+        "supports_early_stop": False,
+        "implemented": True,
     },
     "youtube": {
         "search_runner": "scripts/marketing/crawl/youtube/youtube_search_runner.py",

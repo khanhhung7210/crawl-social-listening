@@ -9,8 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
-from selenium.common.exceptions import SessionNotCreatedException
+from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -30,18 +29,25 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.keyword_config import collect_search_terms, load_keyword_payload
 from social_listening.film_paths import platform_raw_dir
-from social_listening.paths import DATA_DIR, ensure_dir
+from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import (
+    KeywordCrawlStats,
+    load_freshness_policy,
+    should_stop_for_validated_stale_content,
+)
 
 
 DEBUGGER_ADDRESS = os.getenv("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9222")
-MAX_THREADS = int(os.getenv("THREADS_MAX_URLS_PER_KEYWORD", "40"))
-MAX_SCROLL_ROUNDS = 240
-IDLE_ROUNDS_BEFORE_STOP = 8
-MAX_EMPTY_ROUNDS_BEFORE_SKIP = 5
-SCROLL_PAUSE_SECONDS = 2.5
-MAX_RUNTIME_SECONDS = 600
+POLICY = load_freshness_policy("threads")
+MAX_THREADS = POLICY.max_new_urls_per_keyword
+MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
+IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
+MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
+SCROLL_PAUSE_SECONDS = float(os.getenv("THREADS_SCROLL_PAUSE_SECONDS", "2.5"))
+MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
+KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("threads") / "threads_search_results.json"
 SPECIAL_SEARCH_URLS = {
     "bts live viewing": [
@@ -66,27 +72,32 @@ def main() -> int:
     if not search_terms:
         raise RuntimeError("No search terms found in shared keyword config")
 
-    # Initialize crawl state
     with IncrementalCrawlState() as state:
-        # Determine if initial or incremental run
-        is_initial = state.is_initial_run("threads")
+        is_initial = state.is_initial_run("threads") and state.is_initial_run("threads_detail")
         run_type = "initial" if is_initial else "incremental"
+        existing_urls = state.get_known_urls("threads", "threads_detail")
 
         print(f"[threads-search] Run type: {run_type}")
         print(f"[threads-search] Keywords: {len(search_terms)}")
-
-        # Get existing URLs for deduplication
-        existing_urls = state.get_existing_urls("threads")
         print(f"[threads-search] Existing URLs in state: {len(existing_urls)}")
+        print(
+            f"[threads-search] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"max_new={MAX_THREADS} scroll={MAX_SCROLL_ROUNDS} "
+            f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s "
+            f"content_stale_stop={POLICY.consecutive_stale_content_stop}"
+        )
+        print(
+            "[threads-search] Note: do NOT stop on consecutive previously-seen URLs; "
+            "content-time stop only when timestamps are validated"
+        )
 
-        # Start run tracking
         run_id = state.start_run("threads", run_type)
 
         driver = build_driver()
         try:
             new_results: list[dict] = []
             urls_discovered = 0
-            urls_skipped = 0
+            urls_new = 0
 
             for index, keyword in enumerate(search_terms, start=1):
                 print(f"[threads-search] {index}/{len(search_terms)} keyword={keyword}")
@@ -95,8 +106,6 @@ def main() -> int:
                         driver,
                         keyword,
                         existing_urls,
-                        state,
-                        is_initial
                     )
                 except Exception as exc:
                     print(f"[threads-search] skip keyword={keyword} error={exc}")
@@ -110,14 +119,15 @@ def main() -> int:
                     )
                     continue
 
+                stats: KeywordCrawlStats = search_result["stats"]
+                stats.log("threads-search")
                 urls = search_result["urls"]
                 status = search_result["status"]
                 reason = search_result.get("reason", "")
-
-                urls_discovered += len(urls)
+                urls_discovered += stats.discovered
+                urls_new += len(urls)
 
                 if not urls:
-                    print(f"[threads-search] No new URLs for keyword={keyword}")
                     continue
 
                 for position, url in enumerate(urls, start=1):
@@ -129,116 +139,60 @@ def main() -> int:
                             "search_rank": position,
                             "status": status,
                             "reason": reason,
+                            "pending_detail": True,
                         }
                     )
-                    # Mark URL as crawled in state
-                    state.mark_crawled(url, "threads", keyword)
 
-            # Load existing results and merge
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
             merged_results = merge_results(existing_results, new_results)
 
-            # Save merged results
             OUTPUT_FILE.write_text(
                 json.dumps(merged_results, ensure_ascii=False, indent=2),
-                encoding="utf-8"
+                encoding="utf-8",
             )
 
-            urls_skipped = len(existing_urls)
-
-            # Complete run tracking
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
-                urls_crawled=len(new_results),
-                urls_skipped=urls_skipped,
-                keywords_processed=len(search_terms)
+                urls_crawled=0,
+                urls_skipped=len(existing_urls),
+                keywords_processed=len(search_terms),
             )
 
             print(f"[threads-search] Summary:")
-            print(f"  - New URLs discovered: {urls_discovered}")
-            print(f"  - Total URLs in state: {len(existing_urls) + urls_discovered}")
+            print(f"  - Discovered (all keywords): {urls_discovered}")
+            print(f"  - New URLs queued for detail: {urls_new}")
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
             return 0
         finally:
             driver.quit()
 
 
-def search_threads_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
-    """Legacy search function - kept for backward compatibility"""
-    urls: list[str] = []
-    seen: set[str] = set()
-    last_reason = "no_results"
-    for search_url in resolve_search_urls(keyword):
-        driver.get(search_url)
-        time.sleep(5)
-        started_at = time.monotonic()
-        idle_rounds = 0
-        empty_rounds = 0
-
-        for _ in range(MAX_SCROLL_ROUNDS):
-            if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
-                return {
-                    "urls": urls,
-                    "status": "partial" if urls else "no_results",
-                    "reason": "runtime_limit",
-                }
-            before_count = len(urls)
-            for href in get_anchor_hrefs(driver):
-                normalized = normalize_thread_url(href)
-                if not normalized or normalized in seen:
-                    continue
-                seen.add(normalized)
-                urls.append(normalized)
-                if len(urls) >= MAX_THREADS:
-                    return {
-                        "urls": urls,
-                        "status": "ok",
-                        "reason": "max_threads_reached",
-                    }
-
-            idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-            empty_rounds = empty_rounds + 1 if not urls else 0
-            if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
-                last_reason = "idle_limit"
-                break
-            if empty_rounds >= MAX_EMPTY_ROUNDS_BEFORE_SKIP:
-                last_reason = "empty_limit"
-                print(f"[threads-search] no results for keyword={keyword}, skipping url={search_url}")
-                break
-
-            scroll_search_results(driver)
-            time.sleep(SCROLL_PAUSE_SECONDS)
-
-    return {
-        "urls": urls,
-        "status": "partial" if urls else "no_results",
-        "reason": last_reason,
-    }
-
-
 def search_threads_for_keyword_incremental(
     driver: webdriver.Chrome,
     keyword: str,
     existing_urls: set[str],
-    state: IncrementalCrawlState,
-    is_initial: bool
 ) -> dict:
     """
-    Incremental search with early stopping.
+    Incremental search without URL-history early-stop.
 
-    For initial runs: Scroll until max limit or idle
-    For incremental runs: Stop early when hitting old URLs (already crawled)
+    With filter=recent, optional stop only when search cards expose validated
+    content timestamps that are outside the lookback window.
     """
     urls: list[str] = []
     seen: set[str] = set()
-    all_discovered: list[str] = []  # Track all URLs for early stop detection
+    all_discovered: list[str] = []
+    already_seen = 0
+    consecutive_stale_content = 0
     last_reason = "no_results"
-    consecutive_old = 0
-    max_consecutive_old = 999 if is_initial else 10  # Stricter for incremental
+    keyword_started = time.monotonic()
 
     for search_url in resolve_search_urls(keyword):
+        if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
+            last_reason = "keyword_runtime_limit"
+            break
+
         driver.get(search_url)
         time.sleep(5)
         started_at = time.monotonic()
@@ -248,96 +202,202 @@ def search_threads_for_keyword_incremental(
 
         for _ in range(MAX_SCROLL_ROUNDS):
             scroll_rounds += 1
+            elapsed_keyword = time.monotonic() - keyword_started
+            elapsed_url = time.monotonic() - started_at
 
-            # Runtime limit
-            if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
-                print(f"[threads-search] keyword={keyword} stopped: runtime_limit")
-                return {
-                    "urls": urls,
-                    "status": "partial" if urls else "no_results",
-                    "reason": "runtime_limit",
-                }
+            if elapsed_keyword >= KEYWORD_RUNTIME_SECONDS:
+                last_reason = "keyword_runtime_limit"
+                break
+            if elapsed_url >= MAX_RUNTIME_SECONDS:
+                last_reason = "runtime_limit"
+                break
 
             before_count = len(urls)
-            new_in_round = 0
+            card_rows = extract_search_cards(driver)
 
-            for href in get_anchor_hrefs(driver):
-                normalized = normalize_thread_url(href)
+            for row in card_rows:
+                normalized = row["url"]
                 if not normalized or normalized in seen:
                     continue
 
                 seen.add(normalized)
                 all_discovered.append(normalized)
 
-                # Check if URL already crawled
                 if normalized in existing_urls:
-                    consecutive_old += 1
-                else:
-                    consecutive_old = 0  # Reset counter
-                    urls.append(normalized)
-                    new_in_round += 1
+                    already_seen += 1
+                    continue
 
-                # Early stop for incremental runs
-                if not is_initial and consecutive_old >= max_consecutive_old:
-                    print(
-                        f"[threads-search] keyword={keyword} early stop: "
-                        f"hit {consecutive_old} old URLs in a row"
+                # Validated content-time boundary (only when timestamp present)
+                content_ts = row.get("content_timestamp")
+                if content_ts is not None:
+                    from social_listening.crawl_freshness import is_stale
+
+                    stale = is_stale(content_ts, POLICY)
+                    if stale is True:
+                        consecutive_stale_content += 1
+                        # Do not queue stale cards for detail; do not mark successful crawl.
+                        if should_stop_for_validated_stale_content(consecutive_stale_content, POLICY):
+                            last_reason = "freshness_boundary"
+                            stats = KeywordCrawlStats(
+                                keyword=keyword,
+                                discovered=len(all_discovered),
+                                new=len(urls),
+                                stale=consecutive_stale_content,
+                                already_seen=already_seen,
+                                runtime_seconds=time.monotonic() - keyword_started,
+                                stop_reason=last_reason,
+                            )
+                            return {
+                                "urls": urls,
+                                "status": "ok" if urls else "no_results",
+                                "reason": last_reason,
+                                "stats": stats,
+                            }
+                        continue
+                    if stale is False:
+                        consecutive_stale_content = 0
+
+                urls.append(normalized)
+                if len(urls) >= MAX_THREADS:
+                    last_reason = "max_threads_reached"
+                    stats = KeywordCrawlStats(
+                        keyword=keyword,
+                        discovered=len(all_discovered),
+                        new=len(urls),
+                        already_seen=already_seen,
+                        runtime_seconds=time.monotonic() - keyword_started,
+                        stop_reason=last_reason,
                     )
                     return {
                         "urls": urls,
-                        "status": "ok" if urls else "no_results",
-                        "reason": "early_stop_old_urls",
-                    }
-
-                # Max limit
-                if len(urls) >= MAX_THREADS:
-                    print(f"[threads-search] keyword={keyword} stopped: max_threads")
-                    return {
-                        "urls": urls,
                         "status": "ok",
-                        "reason": "max_threads_reached",
+                        "reason": last_reason,
+                        "stats": stats,
                     }
 
-            # Idle/empty detection
+            # Fallback if card extractor found nothing: raw href scan
+            if not card_rows:
+                for href in get_anchor_hrefs(driver):
+                    normalized = normalize_thread_url(href)
+                    if not normalized or normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    all_discovered.append(normalized)
+                    if normalized in existing_urls:
+                        already_seen += 1
+                        continue
+                    urls.append(normalized)
+                    if len(urls) >= MAX_THREADS:
+                        last_reason = "max_threads_reached"
+                        break
+
+            if last_reason == "max_threads_reached":
+                break
+
             idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-            empty_rounds = empty_rounds + 1 if not urls else 0
+            empty_rounds = empty_rounds + 1 if not urls and not already_seen else 0
 
             if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
                 last_reason = "idle_limit"
-                print(
-                    f"[threads-search] keyword={keyword} stopped after {scroll_rounds} rounds: "
-                    f"idle_limit (new={len(urls)})"
-                )
                 break
 
             if empty_rounds >= MAX_EMPTY_ROUNDS_BEFORE_SKIP:
                 last_reason = "empty_limit"
-                print(
-                    f"[threads-search] keyword={keyword} skipping url={search_url}: "
-                    f"no results after {scroll_rounds} rounds"
-                )
                 break
 
-            # Progress logging every 20 rounds
             if scroll_rounds % 20 == 0:
                 print(
                     f"[threads-search] keyword={keyword} round={scroll_rounds} "
                     f"new_urls={len(urls)} discovered={len(all_discovered)} "
-                    f"consecutive_old={consecutive_old}"
+                    f"already_seen={already_seen}"
                 )
 
             scroll_search_results(driver)
             time.sleep(SCROLL_PAUSE_SECONDS)
 
-    return {
-        "urls": urls,
-        "status": "ok" if urls else "no_results",
-        "reason": last_reason,
-    }
+        if last_reason in {
+            "keyword_runtime_limit",
+            "runtime_limit",
+            "max_threads_reached",
+            "freshness_boundary",
+        }:
+            break
+
+    stats = KeywordCrawlStats(
+        keyword=keyword,
+        discovered=len(all_discovered),
+        new=len(urls),
+        already_seen=already_seen,
+        runtime_seconds=time.monotonic() - keyword_started,
+        stop_reason=last_reason,
+    )
+    status = "ok" if urls else ("partial" if all_discovered else "no_results")
+    if last_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
+        status = "partial"
+    return {"urls": urls, "status": status, "reason": last_reason, "stats": stats}
+
+
+def extract_search_cards(driver: webdriver.Chrome) -> list[dict]:
+    """Best-effort URL + relative/absolute time labels from Threads search cards."""
+    try:
+        rows = driver.execute_script(
+            """
+            const out = [];
+            const seen = new Set();
+            const anchors = Array.from(document.querySelectorAll('a[href*="/post/"]'));
+            for (const a of anchors) {
+              const href = a.href || '';
+              const m = href.match(/https:\\/\\/www\\.threads\\.(?:net|com)\\/@[^/]+\\/post\\/[^/?#]+/);
+              if (!m || seen.has(m[0])) continue;
+              seen.add(m[0]);
+              let timeLabel = '';
+              const root = a.closest('div') || a.parentElement;
+              if (root) {
+                const timeNode = root.querySelector('time[datetime], time');
+                if (timeNode) {
+                  timeLabel = timeNode.getAttribute('datetime') || timeNode.getAttribute('title') || timeNode.innerText || '';
+                }
+                if (!timeLabel) {
+                  const aria = root.querySelector('[aria-label]');
+                  if (aria) timeLabel = aria.getAttribute('aria-label') || '';
+                }
+              }
+              out.push({ url: m[0], time_label: (timeLabel || '').trim() });
+            }
+            return out;
+            """
+        )
+    except WebDriverException:
+        return []
+
+    if not isinstance(rows, list):
+        return []
+
+    from social_listening.review_utils import parse_facebook_datetime_label
+
+    results: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = normalize_thread_url(str(row.get("url") or ""))
+        if not url:
+            continue
+        label = str(row.get("time_label") or "").strip()
+        content_ts = None
+        if label:
+            # ISO first
+            from social_listening.crawl_freshness import parse_content_timestamp
+
+            content_ts = parse_content_timestamp(label)
+            if content_ts is None:
+                parsed = parse_facebook_datetime_label(label)
+                if parsed is not None:
+                    content_ts = parsed
+        results.append({"url": url, "content_timestamp": content_ts, "time_label": label})
+    return results
 
 
 def load_existing_results() -> list[dict]:
-    """Load existing search results from OUTPUT_FILE"""
     if not OUTPUT_FILE.exists():
         return []
 
@@ -353,26 +413,15 @@ def load_existing_results() -> list[dict]:
 
 
 def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
-    """
-    Merge existing and new results, deduplicating by URL.
-
-    New results take precedence over existing ones with same URL.
-    """
     by_url: dict[str, dict] = {}
-
-    # Add existing first
     for item in existing:
         url = item.get("url", "")
         if url:
             by_url[url] = item
-
-    # Overwrite/add with new
     for item in new:
         url = item.get("url", "")
         if url:
             by_url[url] = item
-
-    # Return as list, sorted by URL for consistency
     return sorted(by_url.values(), key=lambda x: x.get("url", ""))
 
 
