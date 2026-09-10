@@ -672,8 +672,14 @@ def main() -> int:
         )
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            mod.main()
+            old_argv = sys.argv[:]
+            try:
+                # Avoid leaking importer flags (--film/--file) into metrics CLI.
+                sys.argv = [str(PROJECT_ROOT / "scripts" / "marketing" / "metrics" / "recompute_daily_brand_metrics.py")]
+                spec.loader.exec_module(mod)
+                mod.main()
+            finally:
+                sys.argv = old_argv
     except Exception as exc:
         print(f"Warning: could not recompute daily metrics: {exc}")
 
