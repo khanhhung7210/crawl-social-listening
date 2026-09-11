@@ -11,12 +11,10 @@ Requires Chrome remote-debugging sessions already logged in:
 Usage (from social-listening root):
   PYTHONPATH=src \\
   CRAWL_LOOKBACK_DAYS=14 \\
+  CRAWL_DISCOVERY_LIMIT=20 \\
+  CRAWL_FINAL_LIMIT=5 \\
   FACEBOOK_KEYWORD_LIMIT=1 \\
-  FACEBOOK_MAX_POSTS_PER_KEYWORD=5 \\
   FACEBOOK_KEYWORD_RUNTIME_SECONDS=90 \\
-  TIKTOK_MAX_VIDEOS=5 \\
-  THREADS_MAX_URLS_PER_KEYWORD=5 \\
-  INSTAGRAM_MAX_POSTS=5 \\
   python scripts/shared/smoke_crawl_coverage.py [--platform facebook|tiktok|threads|instagram|all]
 
 Success criteria (per platform):
@@ -86,6 +84,8 @@ def run_platform(name: str) -> int:
         "PYTHONPATH": str(ROOT / "src"),
         "PYTHONUTF8": "1",
         "CRAWL_LOOKBACK_DAYS": os.getenv("CRAWL_LOOKBACK_DAYS", "14"),
+        "CRAWL_DISCOVERY_LIMIT": os.getenv("CRAWL_DISCOVERY_LIMIT", "20"),
+        "CRAWL_FINAL_LIMIT": os.getenv("CRAWL_FINAL_LIMIT", "5"),
         "FACEBOOK_KEYWORD_LIMIT": os.getenv("FACEBOOK_KEYWORD_LIMIT", "1"),
         "FACEBOOK_MAX_POSTS_PER_KEYWORD": os.getenv("FACEBOOK_MAX_POSTS_PER_KEYWORD", "5"),
         "FACEBOOK_KEYWORD_RUNTIME_SECONDS": os.getenv("FACEBOOK_KEYWORD_RUNTIME_SECONDS", "120"),

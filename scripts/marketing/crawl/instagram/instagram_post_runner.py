@@ -34,9 +34,12 @@ from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
+    attach_freshness_fields,
     classify_detail_freshness,
+    content_time_sort_key,
     extract_unix_create_time_from_html,
     load_freshness_policy,
+    should_spend_on_comments,
     should_stop_keyword_details,
 )
 
@@ -47,6 +50,8 @@ INPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_all_posts.json"
 SCROLL_SECONDS_PER_POST = 8
 POLICY = load_freshness_policy("instagram")
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
 COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
 MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
 MAX_COMMENTS = POLICY.max_comments
@@ -95,9 +100,15 @@ def main() -> int:
 
             print(
                 f"[instagram-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+                f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
                 f"max_comment_scroll={MAX_COMMENT_SCROLL_ROUNDS} max_comments={MAX_COMMENTS}"
             )
+            print(
+                "[instagram-detail] Newest is BEST-EFFORT: detail → sort created_at → FINAL; "
+                "stale kept with freshness tag"
+            )
 
+            keyword_batches: dict[str, list[dict]] = {}
             for index, item in enumerate(pending_urls, start=1):
                 url = item["url"]
                 keyword = item["keyword"]
@@ -130,9 +141,14 @@ def main() -> int:
                     print(f"[{index}/{total}] failed {url}")
                     continue
 
-                content_timestamp = record.get("created_time") or record.get("timestamp") or record.get("taken_at_timestamp")
-                freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
-                record["freshness"] = freshness
+                content_timestamp = (
+                    record.get("created_time")
+                    or record.get("created_at")
+                    or record.get("timestamp")
+                    or record.get("taken_at_timestamp")
+                )
+                attach_freshness_fields(record, content_timestamp, POLICY)
+                freshness = record.get("freshness") or "unknown"
 
                 state.mark_crawled(url, "instagram", keyword, content_timestamp)
                 state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
@@ -144,30 +160,40 @@ def main() -> int:
                     stale_count += 1
                     kw_stats.stale += 1
                     stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
-                    records.append(
-                        {
-                            "keyword": keyword,
-                            "url": url,
-                            "freshness": "stale",
-                            "stale": True,
-                            "coverage": False,
-                            "created_time": content_timestamp,
-                            "crawled_at": record.get("crawled_at"),
-                            "crawled_comments": [],
-                            "comments_crawled": 0,
-                        }
-                    )
-                    save_records(OUTPUT_FILE, records)
-                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
-                    continue
 
-                crawled_count += 1
-                kw_stats.detail_success += 1
-                records.append(record)
+                keyword_batches.setdefault(keyword, []).append(record)
+                print(
+                    f"[{index}/{total}] detailed {url} freshness={freshness} "
+                    f"created_at={content_timestamp or '-'}"
+                )
+
+            for keyword, batch in keyword_batches.items():
+                ranked = sorted(batch, key=content_time_sort_key, reverse=True)
+                kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
+                for rank, record in enumerate(ranked, start=1):
+                    in_final = rank <= FINAL_LIMIT
+                    attach_freshness_fields(
+                        record,
+                        record.get("created_time")
+                        or record.get("created_at")
+                        or record.get("timestamp")
+                        or record.get("taken_at_timestamp"),
+                        POLICY,
+                        newest_rank=rank,
+                        in_final_limit=in_final,
+                    )
+                    if not in_final and record.get("crawled_comments"):
+                        record["crawled_comments"] = []
+                        record["comments_crawled"] = 0
+                        record["coverage"] = False
+                    if in_final and record.get("freshness") != "stale" and not record.get("error"):
+                        crawled_count += 1
+                        kw_stats.detail_success += 1
+                    records.append(record)
                 save_records(OUTPUT_FILE, records)
                 print(
-                    f"[{index}/{total}] saved {url} freshness={freshness} "
-                    f"comments_crawled={record.get('comments_crawled', 0)}"
+                    f"[instagram-detail] keyword={keyword!r} detailed={len(batch)} "
+                    f"final_kept={min(len(batch), FINAL_LIMIT)} (best-effort newest)"
                 )
 
             for kw, kw_stats in stats_by_keyword.items():
@@ -287,23 +313,21 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
     freshness = classify_detail_freshness(created_time, POLICY)
 
     comments: list[dict] = []
-    if freshness != "stale":
+    if should_spend_on_comments(freshness):
         comments = crawl_comments(driver, current_url, body_text)
         if MAX_COMMENTS > 0:
             comments = comments[:MAX_COMMENTS]
 
-    return {
+    record = {
         "keyword": keyword,
         "url": url,
         "current_url": current_url,
         "title": page_title,
         "crawled_at": crawled_at,
         "created_time": created_time,
+        "created_at": created_time,
         "timestamp": created_time,
         "taken_at_timestamp": int(created_dt.timestamp()) if created_dt else None,
-        "freshness": freshness,
-        "coverage": freshness != "stale",
-        "stale": freshness == "stale",
         "matched": bool(matched_terms),
         "matched_terms": matched_terms,
         "comment_count_observed": len(comments),
@@ -311,8 +335,11 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
         "comments_crawled": len(comments),
         "crawled_comments": comments,
         "body_text": body_text,
-        "raw_html": page_source if freshness != "stale" else "",
+        "raw_html": page_source if should_spend_on_comments(freshness) else "",
+        "newest_mode": "best_effort",
     }
+    attach_freshness_fields(record, created_time, POLICY)
+    return record
 
 
 def build_driver() -> webdriver.Chrome:

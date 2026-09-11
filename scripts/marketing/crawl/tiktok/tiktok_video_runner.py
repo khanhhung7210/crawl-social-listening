@@ -35,9 +35,12 @@ from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import build_debugger_chrome
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
+    attach_freshness_fields,
     classify_detail_freshness,
+    content_time_sort_key,
     extract_unix_create_time_from_html,
     load_freshness_policy,
+    should_spend_on_comments,
     should_stop_keyword_details,
 )
 
@@ -50,6 +53,8 @@ LEGACY_INPUT_FILE = DATA_DIR / "tiktok" / "raw" / "tiktok_search_results.json"
 SCROLL_SECONDS_PER_VIDEO = 8
 OUTPUT_FILE = platform_raw_dir("tiktok") / "tiktok_all_videos.json"
 POLICY = load_freshness_policy("tiktok")
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
 COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
 MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
 MAX_COMMENTS = POLICY.max_comments
@@ -101,11 +106,18 @@ def main() -> int:
         print(f"[tiktok-detail] URLs skipped: {urls_skipped}")
         print(
             f"[tiktok-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
             f"max_comment_scroll={MAX_COMMENT_SCROLL_ROUNDS} max_comments={MAX_COMMENTS}"
+        )
+        print(
+            "[tiktok-detail] Flow: detail candidates → sort created_time → mark top FINAL; "
+            "stale rows kept (comments skipped)"
         )
 
         driver = build_driver()
         try:
+            # Detail all candidates first (search already capped at DISCOVERY).
+            keyword_batches: dict[str, list[dict]] = {}
             total = len(pending_urls)
             for index, item in enumerate(pending_urls, start=1):
                 url = item["url"]
@@ -155,12 +167,10 @@ def main() -> int:
                     print(f"[{index}/{total}] failed {url}")
                     continue
 
-                # Prefer real publish time; never treat crawl clock as content time for coverage.
                 content_timestamp = record.get("created_time")
-                freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
-                record["freshness"] = freshness
+                attach_freshness_fields(record, content_timestamp, POLICY)
+                freshness = record.get("freshness") or "unknown"
 
-                # Mark search+detail keys so next search does not requeue; stale still marked.
                 state.mark_crawled(url, "tiktok", keyword, content_timestamp)
                 state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
 
@@ -171,30 +181,39 @@ def main() -> int:
                     urls_stale += 1
                     kw_stats.stale += 1
                     stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
-                    # Persist a lightweight skip marker so we do not re-detail; not coverage.
-                    skip_record = {
-                        "keyword": keyword,
-                        "url": url,
-                        "freshness": "stale",
-                        "stale": True,
-                        "coverage": False,
-                        "created_time": content_timestamp,
-                        "crawled_at": record.get("crawled_at"),
-                        "comments_crawled": 0,
-                        "crawled_comments": [],
-                    }
-                    records = merge_record(records, skip_record)
-                    save_records(output_path, records)
-                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
-                    continue
 
-                urls_crawled += 1
-                kw_stats.detail_success += 1
-                records = merge_record(records, record)
+                keyword_batches.setdefault(keyword, []).append(record)
+                print(
+                    f"[{index}/{total}] detailed {url} freshness={freshness} "
+                    f"created_time={content_timestamp or '-'}"
+                )
+
+            # Sort by created_time and keep FINAL newest per keyword.
+            for keyword, batch in keyword_batches.items():
+                ranked = sorted(batch, key=content_time_sort_key, reverse=True)
+                kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
+                for rank, record in enumerate(ranked, start=1):
+                    in_final = rank <= FINAL_LIMIT
+                    attach_freshness_fields(
+                        record,
+                        record.get("created_time") or record.get("published_at"),
+                        POLICY,
+                        newest_rank=rank,
+                        in_final_limit=in_final,
+                    )
+                    if not in_final and record.get("crawled_comments"):
+                        # Outside FINAL window: drop heavy comment payload from coverage set.
+                        record["crawled_comments"] = []
+                        record["comments_crawled"] = 0
+                        record["coverage"] = False
+                    if in_final and record.get("freshness") != "stale" and not record.get("error"):
+                        urls_crawled += 1
+                        kw_stats.detail_success += 1
+                    records = merge_record(records, record)
                 save_records(output_path, records)
                 print(
-                    f"[{index}/{total}] saved {url} freshness={freshness} "
-                    f"comments_crawled={record.get('comments_crawled', 0)}"
+                    f"[tiktok-detail] keyword={keyword!r} detailed={len(batch)} "
+                    f"final_kept={min(len(batch), FINAL_LIMIT)}"
                 )
 
             for kw, kw_stats in stats_by_keyword.items():
@@ -210,8 +229,8 @@ def main() -> int:
             )
 
             print(f"[tiktok-detail] Summary:")
-            print(f"  - Fresh coverage saved: {urls_crawled}")
-            print(f"  - Stale skipped: {urls_stale}")
+            print(f"  - Final coverage saved: {urls_crawled}")
+            print(f"  - Stale annotated: {urls_stale}")
             print(f"  - Failed: {urls_failed}")
             print(f"  - Total records: {len(records)}")
             print(f"  - Output: {output_path.resolve()}")
@@ -394,21 +413,18 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     freshness = classify_detail_freshness(created_time, POLICY)
 
     comments: list[dict] = []
-    if freshness != "stale":
+    if should_spend_on_comments(freshness):
         comments = crawl_comments(driver)
         if MAX_COMMENTS > 0:
             comments = comments[:MAX_COMMENTS]
 
-    return {
+    record = {
         "keyword": keyword,
         "url": url,
         "current_url": current_url,
         "title": page_title,
         "crawled_at": crawled_at,
         "created_time": created_time,
-        "freshness": freshness,
-        "coverage": freshness != "stale",
-        "stale": freshness == "stale",
         "matched": matched,
         "matched_terms": matched_terms,
         "comment_count_observed": len(comments),
@@ -416,9 +432,11 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
         "comments_crawled": len(comments),
         "crawled_comments": comments,
         "body_text": body_text,
-        "raw_html": page_source if freshness != "stale" else "",
+        "raw_html": page_source if should_spend_on_comments(freshness) else "",
         "linked_videos": sorted(set(re.findall(r"https://www\.tiktok\.com/@[^/]+/video/\d+", page_source))),
     }
+    attach_freshness_fields(record, created_time, POLICY)
+    return record
 
 
 def build_driver() -> webdriver.Chrome:

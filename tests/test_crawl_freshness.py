@@ -13,11 +13,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
+    attach_freshness_fields,
     classify_detail_freshness,
     extract_unix_create_time_from_html,
     is_stale,
     load_freshness_policy,
     parse_content_timestamp,
+    select_newest,
+    should_spend_on_comments,
     should_stop_for_validated_stale_content,
     should_stop_keyword_details,
 )
@@ -122,10 +125,56 @@ def test_limits_are_env_configurable(monkeypatch):
     monkeypatch.setenv("TIKTOK_MAX_RUNTIME_SECONDS", "120")
     monkeypatch.setenv("TIKTOK_LOOKBACK_DAYS", "7")
     policy = load_freshness_policy("tiktok")
-    assert policy.max_new_urls_per_keyword == 50
+    assert policy.final_limit == 50
+    assert policy.max_new_urls_per_keyword == 50  # alias
     assert policy.max_scroll_rounds == 30
     assert policy.max_runtime_seconds == 120
     assert policy.lookback_days == 7.0
+
+
+def test_discovery_and_final_shared_limits(monkeypatch):
+    monkeypatch.delenv("TIKTOK_MAX_VIDEOS", raising=False)
+    monkeypatch.delenv("TIKTOK_FINAL_LIMIT", raising=False)
+    monkeypatch.delenv("TIKTOK_DISCOVERY_LIMIT", raising=False)
+    monkeypatch.setenv("CRAWL_DISCOVERY_LIMIT", "300")
+    monkeypatch.setenv("CRAWL_FINAL_LIMIT", "100")
+    policy = load_freshness_policy("tiktok")
+    assert policy.discovery_limit == 300
+    assert policy.final_limit == 100
+    # Final cannot exceed discovery
+    monkeypatch.setenv("CRAWL_FINAL_LIMIT", "500")
+    monkeypatch.setenv("CRAWL_DISCOVERY_LIMIT", "200")
+    policy2 = load_freshness_policy("instagram")
+    assert policy2.discovery_limit == 200
+    assert policy2.final_limit == 200
+
+
+def test_select_newest_and_attach_freshness(monkeypatch):
+    monkeypatch.setenv("CRAWL_LOOKBACK_DAYS", "14")
+    policy = load_freshness_policy("facebook")
+    items = [
+        {"url": "old", "created_time": "2026-01-01T00:00:00+00:00"},
+        {"url": "new", "created_time": "2026-09-09T00:00:00+00:00"},
+        {"url": "mid", "created_time": "2026-09-01T00:00:00+00:00"},
+    ]
+    top = select_newest(items, 2)
+    assert [x["url"] for x in top] == ["new", "mid"]
+
+    row = attach_freshness_fields(
+        {"url": "x"},
+        "2026-08-01T00:00:00+00:00",
+        policy,
+        now=NOW,
+        newest_rank=1,
+        in_final_limit=True,
+    )
+    assert row["freshness"] == "stale"
+    assert row["published_at"]
+    assert row["discovered_at"]
+    assert row["coverage"] is False
+    assert should_spend_on_comments("stale") is False
+    assert should_spend_on_comments("fresh") is True
+    assert should_spend_on_comments("unknown") is True
 
 
 def test_incremental_search_does_not_early_stop_on_interleaved_old(monkeypatch):

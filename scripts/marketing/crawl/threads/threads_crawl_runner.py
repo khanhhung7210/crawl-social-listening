@@ -41,7 +41,9 @@ from social_listening.crawl_freshness import (
 
 DEBUGGER_ADDRESS = os.getenv("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9222")
 POLICY = load_freshness_policy("threads")
-MAX_THREADS = POLICY.max_new_urls_per_keyword
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+MAX_THREADS = DISCOVERY_LIMIT  # search candidate pool; detail/final applied downstream
 MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
 IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
 MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
@@ -82,12 +84,12 @@ def main() -> int:
         print(f"[threads-search] Existing URLs in state: {len(existing_urls)}")
         print(
             f"[threads-search] Policy lookback={POLICY.lookback_days:.1f}d "
-            f"max_new={MAX_THREADS} scroll={MAX_SCROLL_ROUNDS} "
+            f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} scroll={MAX_SCROLL_ROUNDS} "
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s "
             f"content_stale_stop={POLICY.consecutive_stale_content_stop}"
         )
         print(
-            "[threads-search] Note: do NOT stop on consecutive previously-seen URLs; "
+            "[threads-search] Note: filter=recent; do NOT stop on consecutive previously-seen URLs; "
             "content-time stop only when timestamps are validated"
         )
 
@@ -227,7 +229,8 @@ def search_threads_for_keyword_incremental(
                     already_seen += 1
                     continue
 
-                # Validated content-time boundary (only when timestamp present)
+                # Validated content-time boundary (only when timestamp present).
+                # Still queue the URL (keep discovery); stop scrolling after enough stale.
                 content_ts = row.get("content_timestamp")
                 if content_ts is not None:
                     from social_listening.crawl_freshness import is_stale
@@ -235,8 +238,8 @@ def search_threads_for_keyword_incremental(
                     stale = is_stale(content_ts, POLICY)
                     if stale is True:
                         consecutive_stale_content += 1
-                        # Do not queue stale cards for detail; do not mark successful crawl.
                         if should_stop_for_validated_stale_content(consecutive_stale_content, POLICY):
+                            urls.append(normalized)
                             last_reason = "freshness_boundary"
                             stats = KeywordCrawlStats(
                                 keyword=keyword,
@@ -253,8 +256,7 @@ def search_threads_for_keyword_incremental(
                                 "reason": last_reason,
                                 "stats": stats,
                             }
-                        continue
-                    if stale is False:
+                    elif stale is False:
                         consecutive_stale_content = 0
 
                 urls.append(normalized)

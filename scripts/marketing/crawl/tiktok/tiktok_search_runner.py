@@ -35,7 +35,9 @@ from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_p
 TIKTOK_SEARCH_URL = "https://www.tiktok.com/search/video?q={query}"
 DEBUGGER_ADDRESS = os.getenv("TIKTOK_DEBUGGER_ADDRESS", "127.0.0.1:9223")
 POLICY = load_freshness_policy("tiktok")
-MAX_VIDEOS = POLICY.max_new_urls_per_keyword
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+MAX_VIDEOS = DISCOVERY_LIMIT
 MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
 IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
 MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
@@ -61,12 +63,12 @@ def main() -> int:
         print(f"[tiktok-search] Existing URLs: {len(existing_urls)}")
         print(
             f"[tiktok-search] Policy lookback={POLICY.lookback_days:.1f}d "
-            f"max_new={MAX_VIDEOS} scroll={MAX_SCROLL_ROUNDS} "
+            f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} scroll={MAX_SCROLL_ROUNDS} "
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[tiktok-search] Note: search ranking is NOT assumed chronological; "
-            "no early-stop on consecutive previously-seen URLs"
+            "[tiktok-search] Note: search ranking is NOT chronological; "
+            "discover candidate pool only — detail sorts by created_time then keeps FINAL"
         )
 
         run_id = state.start_run("tiktok", run_type)

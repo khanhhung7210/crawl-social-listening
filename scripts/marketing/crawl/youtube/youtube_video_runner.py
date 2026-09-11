@@ -32,6 +32,13 @@ from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import (
+    attach_freshness_fields,
+    content_time_sort_key,
+    extract_unix_create_time_from_html,
+    load_freshness_policy,
+    should_spend_on_comments,
+)
 
 DEBUGGER_ADDRESS = os.getenv("YOUTUBE_DEBUGGER_ADDRESS", "127.0.0.1:9225")
 VIDEO_URL = ""
@@ -41,9 +48,13 @@ LEGACY_FILTERED_INPUT_FILE = DATA_DIR / "youtube" / "raw" / "youtube_search_resu
 LEGACY_INPUT_FILE = DATA_DIR / "youtube" / "raw" / "youtube_search_results.json"
 OUTPUT_FILE = platform_raw_dir("youtube") / "youtube_all_videos.json"
 SCROLL_SECONDS_PER_VIDEO = 8
-COMMENT_IDLE_ROUNDS_BEFORE_STOP = 6
-MAX_COMMENT_SCROLL_ROUNDS = 60
+POLICY = load_freshness_policy("youtube")
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
+MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
 COMMENT_SCROLL_PAUSE_SECONDS = 1.5
+MAX_COMMENTS = POLICY.max_comments
 
 
 def main() -> int:
@@ -75,29 +86,53 @@ def main() -> int:
 
         print(f"[youtube-detail] URLs to crawl: {len(pending_urls)}")
         print(f"[youtube-detail] URLs skipped: {urls_skipped}")
+        print(
+            f"[youtube-detail] Policy discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
+            f"lookback={POLICY.lookback_days:.1f}d"
+        )
 
         driver = build_driver()
         try:
+            keyword_batches: dict[str, list[dict]] = {}
             total = len(pending_urls)
             for index, item in enumerate(pending_urls, start=1):
                 url = item["url"]
                 keyword = item["keyword"]
                 try:
                     record = crawl_video(driver, url, keyword, search_terms)
-                    # Extract timestamp if available
-                    content_timestamp = record.get("published_at") or record.get("crawled_at")
+                    content_timestamp = record.get("published_at") or record.get("created_time")
+                    state.mark_crawled(url, "youtube", keyword, content_timestamp)
                     state.mark_crawled(url, "youtube_detail", keyword, content_timestamp)
-                    urls_crawled += 1
                 except Exception as exc:
                     record = {
                         "keyword": keyword,
                         "url": url,
                         "matched": False,
                         "error": str(exc),
+                        "freshness": "unknown",
                     }
-                records.append(record)
+                keyword_batches.setdefault(keyword, []).append(record)
+                print(f"[{index}/{total}] detailed {url}")
+
+            for keyword, batch in keyword_batches.items():
+                ranked = sorted(batch, key=content_time_sort_key, reverse=True)
+                for rank, record in enumerate(ranked, start=1):
+                    in_final = rank <= FINAL_LIMIT
+                    attach_freshness_fields(
+                        record,
+                        record.get("published_at") or record.get("created_time"),
+                        POLICY,
+                        newest_rank=rank,
+                        in_final_limit=in_final,
+                    )
+                    if not in_final and record.get("crawled_comments"):
+                        record["crawled_comments"] = []
+                        record["comment_count_observed"] = 0
+                        record["coverage"] = False
+                    if in_final and not record.get("error") and record.get("freshness") != "stale":
+                        urls_crawled += 1
+                    records.append(record)
                 save_records(OUTPUT_FILE, records)
-                print(f"[{index}/{total}] saved {url}")
 
             state.complete_run(
                 run_id,
@@ -197,12 +232,6 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     time.sleep(4)
     expand_video_page(driver)
 
-    deadline = time.time() + max(SCROLL_SECONDS_PER_VIDEO, 3)
-    while time.time() < deadline:
-        driver.execute_script("window.scrollBy(0, window.innerHeight);")
-        time.sleep(1.2)
-
-    comments = crawl_comments(driver, url)
     page_source = driver.page_source
     body_text = driver.execute_script("return document.body ? document.body.innerText : '';") or ""
     page_title = driver.title or ""
@@ -210,19 +239,40 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     crawled_at = datetime.now(timezone.utc).isoformat()
     matched_terms = [term for term in search_terms if contains_keyword(normalize_text(body_text), term)]
 
-    return {
+    published_dt = extract_unix_create_time_from_html(page_source)
+    published_at = published_dt.isoformat() if published_dt else ""
+    freshness = "unknown"
+    from social_listening.crawl_freshness import classify_detail_freshness
+
+    freshness = classify_detail_freshness(published_at, POLICY)
+
+    comments: list[dict] = []
+    if should_spend_on_comments(freshness):
+        deadline = time.time() + max(SCROLL_SECONDS_PER_VIDEO, 3)
+        while time.time() < deadline:
+            driver.execute_script("window.scrollBy(0, window.innerHeight);")
+            time.sleep(1.2)
+        comments = crawl_comments(driver, url)
+        if MAX_COMMENTS > 0:
+            comments = comments[:MAX_COMMENTS]
+
+    record = {
         "keyword": keyword,
         "url": url,
         "current_url": current_url,
         "title": page_title,
         "crawled_at": crawled_at,
+        "published_at": published_at,
+        "created_time": published_at,
         "matched": bool(matched_terms),
         "matched_terms": matched_terms,
         "comment_count_observed": len(comments),
         "crawled_comments": comments,
         "body_text": body_text,
-        "raw_html": page_source,
+        "raw_html": page_source if should_spend_on_comments(freshness) else "",
     }
+    attach_freshness_fields(record, published_at, POLICY)
+    return record
 
 
 def build_driver() -> webdriver.Chrome:

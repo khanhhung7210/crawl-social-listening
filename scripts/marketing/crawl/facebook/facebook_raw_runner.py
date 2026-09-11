@@ -42,8 +42,10 @@ from social_listening.review_utils import (
 )
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
+    attach_freshness_fields,
     classify_detail_freshness,
     load_freshness_policy,
+    should_spend_on_comments,
     should_stop_keyword_details,
 )
 
@@ -56,10 +58,10 @@ FACEBOOK_SEARCH_URLS = [
 DEBUGGER_ADDRESS = os.getenv("FACEBOOK_DEBUGGER_ADDRESS", "127.0.0.1:9226")
 OUTPUT_ROOT = DATA_DIR / "facebook" / "raw" / film_slug()
 POLICY = load_freshness_policy("facebook")
-MAX_POSTS = POLICY.max_new_urls_per_keyword
-MAX_POSTS_PER_KEYWORD = int(
-    os.getenv("FACEBOOK_MAX_POSTS_PER_KEYWORD", str(POLICY.max_new_urls_per_keyword))
-)
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+MAX_POSTS = DISCOVERY_LIMIT  # search candidate pool
+MAX_POSTS_PER_KEYWORD = FINAL_LIMIT  # detail after Recent filter + newest keep
 MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
 IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
 MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
@@ -125,14 +127,14 @@ def main(force: bool = False) -> int:
         print(f"[facebook-search] Existing URLs in state: {len(existing_urls)}")
         print(
             f"[facebook-search] Policy lookback={POLICY.lookback_days:.1f}d "
-            f"max_new={MAX_POSTS_PER_KEYWORD} scroll={MAX_SCROLL_ROUNDS} "
+            f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} scroll={MAX_SCROLL_ROUNDS} "
             f"keyword_runtime={KEYWORD_RUNTIME_SECONDS}s "
             f"max_stale_details={POLICY.max_stale_details_per_keyword}"
         )
         print(
-            "[facebook-search] Note: Facebook search is non-chronological; "
+            "[facebook-search] Note: enable Posts + Recent when available; "
             "no early-stop on consecutive previously-seen URLs; "
-            "stale posts (by content timestamp) are not counted as current coverage"
+            "stale posts kept with freshness tag (comments skipped)"
         )
 
         run_id = state.start_run("facebook", run_type)
@@ -190,10 +192,11 @@ def main(force: bool = False) -> int:
                 total_urls_discovered += len(search_result["urls"])
                 stats.new = len(keyword_urls)
 
-                # Crawl details for new URLs only; apply freshness before counting coverage
+                # Detail up to FINAL after Recent filter; keep stale rows with freshness meta.
                 posts: list[dict] = []
                 stale_details = 0
-                for url_index, url in enumerate(keyword_urls[:MAX_POSTS_PER_KEYWORD], start=1):
+                detail_budget = min(len(keyword_urls), MAX_POSTS_PER_KEYWORD)
+                for url_index, url in enumerate(keyword_urls[:detail_budget], start=1):
                     if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
                         stats.stop_reason = "keyword_runtime_limit"
                         break
@@ -204,7 +207,7 @@ def main(force: bool = False) -> int:
                     if url_index % 10 == 0:
                         print(
                             f"[facebook-search] keyword={keyword} crawling detail "
-                            f"{url_index}/{min(len(keyword_urls), MAX_POSTS_PER_KEYWORD)}"
+                            f"{url_index}/{detail_budget}"
                         )
 
                     driver, post = crawl_post_with_retries(driver, url)
@@ -213,27 +216,30 @@ def main(force: bool = False) -> int:
                         continue
 
                     content_timestamp = post.get("created_time")
-                    freshness = classify_detail_freshness(content_timestamp, POLICY)
+                    attach_freshness_fields(
+                        post,
+                        content_timestamp,
+                        POLICY,
+                        newest_rank=url_index,
+                        in_final_limit=True,
+                    )
+                    freshness = post.get("freshness") or "unknown"
 
-                    # Mark in state with real content time so we do not rediscover forever.
-                    # Stale marks are NOT treated as successful current coverage below.
                     state.mark_crawled(url, "facebook", keyword, content_timestamp)
                     existing_urls.add(url)
-
-                    if freshness == "stale":
-                        stats.stale += 1
-                        stale_details += 1
-                        total_stale += 1
-                        # Skip comment expansion work already done inside crawl_post for stale:
-                        # crawl_post crawls comments before we know — re-crawl with skip would be
-                        # costlier; we drop stale from output instead.
-                        continue
 
                     post_key = canonical_post_key(post)
                     if post_key and post_key in session_crawled_post_keys:
                         continue
                     if post_key:
                         session_crawled_post_keys.add(post_key)
+
+                    if freshness == "stale":
+                        stats.stale += 1
+                        stale_details += 1
+                        total_stale += 1
+                        posts.append(post)
+                        continue
 
                     comments = ((post.get("comments") or {}).get("data") or [])
                     stats.comments_found += int(post.get("comments_found") or 0)
@@ -245,7 +251,6 @@ def main(force: bool = False) -> int:
                     stats.detail_success += 1
                     total_urls_crawled += 1
 
-                # Append fresh posts only (preserve prior same-day fresh rows)
                 append_posts_to_jsonl(file_path, posts)
 
                 if not stats.stop_reason:
@@ -345,30 +350,105 @@ def load_search_results(driver: webdriver.Chrome, keyword: str) -> None:
 
 
 def ensure_posts_context(driver: webdriver.Chrome, keyword: str) -> bool:
-    if has_post_links(driver):
-        return True
+    """
+    1) Enter Posts / Bài viết
+    2) Prefer Recent Posts / Bài viết mới đây (fail-soft if missing)
+    3) Then caller may scroll + collect URLs
+    """
+    posts_ok = has_post_links(driver)
 
-    for xpath in (
-        "//a[contains(@href, '/search/posts') or contains(@href, '/posts/?q=')]",
-        "//span[normalize-space()='Posts']/ancestor::a[1]",
-        "//span[normalize-space()='Bài viết']/ancestor::a[1]",
-        "//div[@role='tab']//span[normalize-space()='Posts']/ancestor::*[@role='tab'][1]",
-        "//div[@role='tab']//span[normalize-space()='Bài viết']/ancestor::*[@role='tab'][1]",
+    if not posts_ok:
+        for xpath in (
+            "//a[contains(@href, '/search/posts') or contains(@href, '/posts/?q=')]",
+            "//span[normalize-space()='Posts']/ancestor::a[1]",
+            "//span[normalize-space()='Bài viết']/ancestor::a[1]",
+            "//div[@role='tab']//span[normalize-space()='Posts']/ancestor::*[@role='tab'][1]",
+            "//div[@role='tab']//span[normalize-space()='Bài viết']/ancestor::*[@role='tab'][1]",
+        ):
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+                for element in elements[:2]:
+                    if not element.is_displayed():
+                        continue
+                    driver.execute_script("arguments[0].click();", element)
+                    time.sleep(PAGE_LOAD_WAIT_SECONDS)
+                    dismiss_dialogs(driver)
+                    if has_post_links(driver):
+                        posts_ok = True
+                        break
+                if posts_ok:
+                    break
+            except Exception:
+                continue
+
+    if not posts_ok:
+        posts_ok = submit_search_from_input(driver, keyword)
+
+    if posts_ok:
+        recent_ok = ensure_recent_posts_filter(driver)
+        print(
+            f"[facebook-search] keyword={keyword} posts_context=ok recent_filter="
+            f"{'on' if recent_ok else 'unavailable(fail-soft)'}",
+            flush=True,
+        )
+    return posts_ok
+
+
+def ensure_recent_posts_filter(driver: webdriver.Chrome) -> bool:
+    """Click Recent Posts / Bài viết mới đây when the control exists. Never hard-fail."""
+    # Already on recent?
+    try:
+        active = driver.find_elements(
+            By.XPATH,
+            "//*[contains(@aria-selected,'true') or contains(@aria-current,'page') or "
+            "contains(@aria-pressed,'true')]"
+            "[contains(translate(normalize-space(.),"
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'recent') or "
+            "contains(normalize-space(.),'mới đây') or contains(normalize-space(.),'Moi day')]",
+        )
+        if any(el.is_displayed() for el in active[:3]):
+            return True
+    except Exception:
+        pass
+
+    xpaths = (
+        "//span[contains(normalize-space(),'Recent Posts')]/ancestor::a[1]",
+        "//span[contains(normalize-space(),'Recent posts')]/ancestor::a[1]",
+        "//span[contains(normalize-space(),'Bài viết mới đây')]/ancestor::a[1]",
+        "//span[contains(normalize-space(),'Bai viet moi day')]/ancestor::a[1]",
+        "//div[@role='listbox']//span[contains(normalize-space(),'Recent')]/ancestor::*[@role='option'][1]",
+        "//div[@role='listbox']//span[contains(normalize-space(),'mới đây')]/ancestor::*[@role='option'][1]",
+        "//div[@role='menu']//span[contains(normalize-space(),'Recent')]/ancestor::*[@role='menuitem'][1]",
+        "//div[@role='menu']//span[contains(normalize-space(),'mới đây')]/ancestor::*[@role='menuitem'][1]",
+        "//span[normalize-space()='Recent']/ancestor::div[@role='button' or @role='tab' or self::a][1]",
+        "//span[contains(normalize-space(),'Mới nhất')]/ancestor::div[@role='button' or @role='tab' or self::a][1]",
+    )
+    # Open Filters / Sort menu first when present (EN/VI).
+    for filter_xpath in (
+        "//div[@role='button' and (contains(.,'Filters') or contains(.,'Bộ lọc') or contains(.,'Sort'))]",
+        "//span[normalize-space()='Filters' or normalize-space()='Bộ lọc']/ancestor::div[@role='button'][1]",
     ):
         try:
-            elements = driver.find_elements(By.XPATH, xpath)
-            for element in elements[:2]:
+            for el in driver.find_elements(By.XPATH, filter_xpath)[:2]:
+                if el.is_displayed():
+                    driver.execute_script("arguments[0].click();", el)
+                    time.sleep(1.0)
+                    break
+        except Exception:
+            continue
+
+    for xpath in xpaths:
+        try:
+            for element in driver.find_elements(By.XPATH, xpath)[:3]:
                 if not element.is_displayed():
                     continue
                 driver.execute_script("arguments[0].click();", element)
                 time.sleep(PAGE_LOAD_WAIT_SECONDS)
                 dismiss_dialogs(driver)
-                if has_post_links(driver):
-                    return True
+                return True
         except Exception:
             continue
-
-    return submit_search_from_input(driver, keyword)
+    return False
 
 
 def submit_search_from_input(driver: webdriver.Chrome, keyword: str) -> bool:
@@ -612,10 +692,9 @@ def crawl_post(driver: webdriver.Chrome, post_url: str) -> dict:
         "comments_crawled": 0,
     }
 
-    freshness = classify_detail_freshness(created_time, POLICY)
-    post["freshness"] = freshness
-    # Skip expensive comment pagination for validated-stale posts.
-    if freshness == "stale":
+    attach_freshness_fields(post, created_time, POLICY)
+    # Skip expensive comment pagination for validated-stale posts; keep the row.
+    if not should_spend_on_comments(str(post.get("freshness") or "unknown")):
         return post
 
     if MAX_COMMENTS != 0:

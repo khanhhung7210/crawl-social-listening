@@ -67,6 +67,11 @@ def main() -> int:
                 driver.get(maps_url_with_hl(url))
                 time.sleep(6)
                 open_reviews_panel(driver)
+                sort_ok = select_review_sort(driver, "Most recent")
+                print(
+                    f"[google-maps-review] sort_most_recent="
+                    f"{'on' if sort_ok else 'unavailable(fail-soft)'}"
+                )
                 reveal_original_vietnamese_reviews(driver)
                 scroll_reviews_panel(driver)
                 reveal_original_vietnamese_reviews(driver)
@@ -76,6 +81,7 @@ def main() -> int:
                         "current_url": str(driver.current_url or url),
                         "search_keyword": str(entry.get("search_keyword") or entry.get("keyword") or "").strip(),
                         "crawled_at": datetime.now(timezone.utc).isoformat(),
+                        "review_sort": "most_recent" if sort_ok else "default",
                         "raw_html": driver.page_source,
                         "crawled_reviews": extract_reviews(driver),
                         "place_metadata": extract_place_metadata(driver),
@@ -121,6 +127,64 @@ def open_reviews_panel(driver: webdriver.Chrome) -> None:
         """
     )
     time.sleep(3)
+
+
+def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> bool:
+    """
+    Open Reviews → sort → Most recent / Mới nhất.
+    Fail-soft: returns False if controls are missing.
+    """
+    # Click the sort dropdown (often shows current mode e.g. "Most relevant")
+    opened = driver.execute_script(
+        """
+        const labels = [
+          'Sort', 'Sắp xếp', 'Most relevant', 'Liên quan nhất',
+          'Most recent', 'Mới nhất', 'Newest'
+        ];
+        const nodes = Array.from(document.querySelectorAll(
+          'button, [role="button"], [aria-haspopup="listbox"], [jsaction*="sort"]'
+        ));
+        for (const el of nodes) {
+          const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
+          if (!text) continue;
+          if (labels.some((l) => text.includes(l))) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+        """
+    )
+    if not opened:
+        return False
+    time.sleep(1.0)
+
+    targets = ["Most recent", "Newest", "Mới nhất", "Gần đây nhất"]
+    if mode.strip().lower() not in {"most recent", "newest", ""}:
+        targets = [mode] + targets
+
+    clicked = driver.execute_script(
+        """
+        const targets = arguments[0];
+        const nodes = Array.from(document.querySelectorAll(
+          '[role="menuitemradio"], [role="option"], [role="menuitem"], button, li, div'
+        ));
+        for (const el of nodes) {
+          const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
+          if (!text) continue;
+          if (targets.some((t) => text === t || text.includes(t))) {
+            // Prefer exact newest labels over "Most relevant"
+            if (/relevant|liên quan/i.test(text) && !/recent|mới|newest/i.test(text)) continue;
+            el.click();
+            return true;
+          }
+        }
+        return false;
+        """,
+        targets,
+    )
+    time.sleep(2.0)
+    return bool(clicked)
 
 
 def reveal_original_vietnamese_reviews(driver: webdriver.Chrome) -> None:

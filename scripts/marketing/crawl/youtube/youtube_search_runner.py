@@ -32,15 +32,20 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
 
 YOUTUBE_SEARCH_URL = "https://www.youtube.com/results?search_query={query}"
 DEBUGGER_ADDRESS = os.getenv("YOUTUBE_DEBUGGER_ADDRESS", "127.0.0.1:9225")
-MAX_VIDEOS = 100
-MAX_SCROLL_ROUNDS = 80
-IDLE_ROUNDS_BEFORE_STOP = 6
-MAX_EMPTY_ROUNDS_BEFORE_SKIP = 5
-SCROLL_PAUSE_SECONDS = 2.0
-MAX_RUNTIME_SECONDS = 300
+POLICY = load_freshness_policy("youtube")
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+MAX_VIDEOS = DISCOVERY_LIMIT
+MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
+IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
+MAX_EMPTY_ROUNDS_BEFORE_SKIP = POLICY.empty_rounds_before_skip
+SCROLL_PAUSE_SECONDS = float(os.getenv("YOUTUBE_SCROLL_PAUSE_SECONDS", "2.0"))
+MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
+KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("youtube") / "youtube_search_results.json"
 
 
@@ -50,13 +55,22 @@ def main() -> int:
         raise RuntimeError("No search terms found in shared keyword config")
 
     with IncrementalCrawlState() as state:
-        is_initial = state.is_initial_run("youtube")
+        is_initial = state.is_initial_run("youtube") and state.is_initial_run("youtube_detail")
         run_type = "initial" if is_initial else "incremental"
-        existing_urls = state.get_existing_urls("youtube")
+        existing_urls = state.get_known_urls("youtube", "youtube_detail")
 
         print(f"[youtube-search] Run type: {run_type}")
         print(f"[youtube-search] Keywords: {len(search_terms)}")
         print(f"[youtube-search] Existing URLs: {len(existing_urls)}")
+        print(
+            f"[youtube-search] Policy discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
+            f"scroll={MAX_SCROLL_ROUNDS} runtime={MAX_RUNTIME_SECONDS}s"
+        )
+        print(
+            "[youtube-search] Note: try Upload date filter (fail-soft); "
+            "no early-stop on consecutive previously-seen URLs; "
+            "FINAL newest sort happens after detail timestamps"
+        )
 
         run_id = state.start_run("youtube", run_type)
 
@@ -65,20 +79,23 @@ def main() -> int:
             new_results: list[dict] = []
             global_seen: set[str] = set()
             urls_discovered = 0
-            max_consecutive_old = 999 if is_initial else 10
+            urls_new = 0
 
             for index, keyword in enumerate(search_terms, start=1):
                 print(f"[youtube-search] {index}/{len(search_terms)} keyword={keyword}")
                 try:
                     search_result = search_videos_for_keyword_incremental(
-                        driver, keyword, existing_urls, is_initial, max_consecutive_old
+                        driver, keyword, existing_urls
                     )
                 except Exception as exc:
                     print(f"[youtube-search] skip keyword={keyword} error={exc}")
                     continue
 
+                stats: KeywordCrawlStats = search_result["stats"]
+                stats.log("youtube-search")
                 urls = search_result["urls"]
-                urls_discovered += len(urls)
+                urls_discovered += stats.discovered
+                urls_new += len(urls)
 
                 if not urls:
                     print(f"[youtube-search] No new URLs for keyword={keyword}")
@@ -92,9 +109,11 @@ def main() -> int:
                         "keyword": keyword,
                         "url": url,
                         "status": search_result["status"],
-                        "reason": search_result.get("reason", "")
+                        "reason": search_result.get("reason", ""),
+                        "pending_detail": True,
+                        "upload_date_filter": search_result.get("upload_date_filter"),
                     })
-                    state.mark_crawled(url, "youtube", keyword)
+                    # Do not mark at search time — detail owns coverage + published_at.
 
             # Merge with existing
             ensure_dir(OUTPUT_FILE.parent)
@@ -109,14 +128,14 @@ def main() -> int:
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
-                urls_crawled=len(new_results),
+                urls_crawled=0,
                 urls_skipped=len(existing_urls),
                 keywords_processed=len(search_terms)
             )
 
             print(f"[youtube-search] Summary:")
-            print(f"  - New URLs discovered: {urls_discovered}")
-            print(f"  - Total URLs in state: {len(existing_urls) + urls_discovered}")
+            print(f"  - Discovered (all keywords): {urls_discovered}")
+            print(f"  - New URLs queued for detail: {urls_new}")
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
             return 0
         finally:
@@ -127,12 +146,16 @@ def search_videos_for_keyword_incremental(
     driver: webdriver.Chrome,
     keyword: str,
     existing_urls: set[str],
-    is_initial: bool,
-    max_consecutive_old: int
 ) -> dict:
-    """Incremental search with early stop"""
+    """Scroll until idle/empty/safety. Never stop on consecutive old URLs alone."""
     driver.get(YOUTUBE_SEARCH_URL.format(query=quote_plus(keyword)))
     time.sleep(4)
+    upload_filter = ensure_upload_date_filter(driver)
+    print(
+        f"[youtube-search] keyword={keyword} upload_date_filter="
+        f"{'on' if upload_filter else 'unavailable(fail-soft)'}",
+        flush=True,
+    )
     started_at = time.monotonic()
 
     urls: list[str] = []
@@ -140,15 +163,19 @@ def search_videos_for_keyword_incremental(
     all_discovered: list[str] = []
     idle_rounds = 0
     empty_rounds = 0
-    consecutive_old = 0
+    already_seen = 0
     scroll_rounds = 0
+    stop_reason = "scroll_exhausted"
 
     for _ in range(MAX_SCROLL_ROUNDS):
         scroll_rounds += 1
-
-        if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
-            print(f"[youtube-search] keyword={keyword} stopped: runtime_limit")
-            return {"urls": urls, "status": "partial" if urls else "no_results", "reason": "runtime_limit"}
+        elapsed = time.monotonic() - started_at
+        if elapsed >= KEYWORD_RUNTIME_SECONDS:
+            stop_reason = "keyword_runtime_limit"
+            break
+        if elapsed >= MAX_RUNTIME_SECONDS:
+            stop_reason = "runtime_limit"
+            break
 
         before_count = len(urls)
 
@@ -161,39 +188,112 @@ def search_videos_for_keyword_incremental(
             all_discovered.append(normalized)
 
             if normalized in existing_urls:
-                consecutive_old += 1
-            else:
-                consecutive_old = 0
-                urls.append(normalized)
+                already_seen += 1
+                continue
 
-            # Early stop for incremental
-            if not is_initial and consecutive_old >= max_consecutive_old:
-                print(f"[youtube-search] keyword={keyword} early stop: hit {consecutive_old} old URLs")
-                return {"urls": urls, "status": "ok" if urls else "no_results", "reason": "early_stop_old_urls"}
-
+            urls.append(normalized)
             if len(urls) >= MAX_VIDEOS:
-                print(f"[youtube-search] keyword={keyword} stopped: max_videos")
-                return {"urls": urls, "status": "ok", "reason": "max_videos_reached"}
+                stop_reason = "max_videos_reached"
+                break
+
+        if stop_reason == "max_videos_reached":
+            break
 
         idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-        empty_rounds = empty_rounds + 1 if not urls else 0
+        empty_rounds = empty_rounds + 1 if not urls and not already_seen else 0
 
         if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
-            print(f"[youtube-search] keyword={keyword} stopped: idle_limit")
-            return {"urls": urls, "status": "partial" if urls else "no_results", "reason": "idle_limit"}
+            stop_reason = "idle_limit"
+            break
 
         if empty_rounds >= MAX_EMPTY_ROUNDS_BEFORE_SKIP:
-            print(f"[youtube-search] keyword={keyword} stopped: empty_limit")
-            return {"urls": urls, "status": "no_results", "reason": "empty_limit"}
+            stop_reason = "empty_limit"
+            break
 
-        # Progress logging
         if scroll_rounds % 15 == 0:
-            print(f"[youtube-search] keyword={keyword} round={scroll_rounds} new_urls={len(urls)} discovered={len(all_discovered)} consecutive_old={consecutive_old}")
+            print(
+                f"[youtube-search] keyword={keyword} round={scroll_rounds} "
+                f"new_urls={len(urls)} discovered={len(all_discovered)} already_seen={already_seen}"
+            )
 
         scroll_search_results(driver)
         time.sleep(SCROLL_PAUSE_SECONDS)
 
-    return {"urls": urls, "status": "ok" if urls else "no_results", "reason": "scroll_exhausted"}
+    stats = KeywordCrawlStats(
+        keyword=keyword,
+        discovered=len(all_discovered),
+        new=len(urls),
+        already_seen=already_seen,
+        runtime_seconds=time.monotonic() - started_at,
+        stop_reason=stop_reason,
+        extras={"upload_date_filter": upload_filter},
+    )
+    status = "ok" if urls else ("partial" if all_discovered else "no_results")
+    if stop_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
+        status = "partial"
+    return {
+        "urls": urls,
+        "status": status,
+        "reason": stop_reason,
+        "stats": stats,
+        "upload_date_filter": upload_filter,
+    }
+
+
+def ensure_upload_date_filter(driver: webdriver.Chrome) -> bool:
+    """Bộ lọc → Tải lên gần đây / Filters → Upload date. Fail-soft."""
+    try:
+        opened = driver.execute_script(
+            """
+            const labels = ['Search filters', 'Filters', 'Bộ lọc', 'Filter'];
+            const nodes = Array.from(document.querySelectorAll(
+              'button, yt-chip-cloud-chip-renderer, [aria-label]'
+            ));
+            for (const el of nodes) {
+              const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
+              if (!text) continue;
+              if (labels.some((l) => text.toLowerCase().includes(l.toLowerCase()))) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+            """
+        )
+        if opened:
+            time.sleep(1.0)
+        clicked = driver.execute_script(
+            """
+            const targets = [
+              'Upload date', 'Tải lên gần đây', 'Ngày tải lên',
+              'This week', 'Tuần này', 'Today', 'Hôm nay'
+            ];
+            // Prefer exact "Upload date" / "Tải lên gần đây" as sort mode when present
+            const preferred = ['Upload date', 'Tải lên gần đây', 'Ngày tải lên'];
+            const nodes = Array.from(document.querySelectorAll(
+              'yt-formatted-string, tp-yt-paper-item, a, yt-chip-cloud-chip-renderer, span'
+            ));
+            const clickMatch = (wanted) => {
+              for (const el of nodes) {
+                const text = (el.innerText || el.textContent || '').trim();
+                if (!text) continue;
+                if (wanted.some((w) => text === w || text.includes(w))) {
+                  el.click();
+                  return true;
+                }
+              }
+              return false;
+            };
+            if (clickMatch(preferred)) return true;
+            return clickMatch(targets);
+            """
+        )
+        if clicked:
+            time.sleep(2.0)
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def load_existing_results() -> list[dict]:

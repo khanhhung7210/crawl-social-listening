@@ -37,7 +37,9 @@ from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_p
 INSTAGRAM_SEARCH_URL = "https://www.instagram.com/explore/search/keyword/?q={query}"
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
 POLICY = load_freshness_policy("instagram")
-MAX_POSTS = POLICY.max_new_urls_per_keyword
+DISCOVERY_LIMIT = POLICY.discovery_limit
+FINAL_LIMIT = POLICY.final_limit
+MAX_POSTS = DISCOVERY_LIMIT
 MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
 IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
 SCROLL_PAUSE_SECONDS = float(os.getenv("INSTAGRAM_SCROLL_PAUSE_SECONDS", "2.5"))
@@ -61,12 +63,12 @@ def main() -> int:
         print(f"[instagram-search] Existing URLs: {len(existing_urls)}")
         print(
             f"[instagram-search] Policy lookback={POLICY.lookback_days:.1f}d "
-            f"max_new={MAX_POSTS} scroll={MAX_SCROLL_ROUNDS} "
+            f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} scroll={MAX_SCROLL_ROUNDS} "
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[instagram-search] Note: search ranking is NOT assumed chronological; "
-            "no early-stop on consecutive previously-seen URLs"
+            "[instagram-search] Note: newest is BEST-EFFORT (no reliable Recent UI); "
+            "discover candidates — detail sorts by created_at then keeps FINAL"
         )
 
         run_id = state.start_run("instagram", run_type)

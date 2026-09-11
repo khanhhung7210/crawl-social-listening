@@ -50,8 +50,9 @@ class FreshnessPolicy:
 
     platform: str
     lookback: timedelta
-    # Safety caps (NOT daily coverage targets)
-    max_new_urls_per_keyword: int
+    # Discover broadly (search scroll), then keep newest FINAL after timestamps.
+    discovery_limit: int
+    final_limit: int
     max_scroll_rounds: int
     max_runtime_seconds: int
     keyword_runtime_seconds: int
@@ -70,6 +71,11 @@ class FreshnessPolicy:
     def lookback_days(self) -> float:
         return self.lookback.total_seconds() / 86400.0
 
+    @property
+    def max_new_urls_per_keyword(self) -> int:
+        """Backward-compatible alias for final_limit (kept newest after sort)."""
+        return self.final_limit
+
 
 def _platform_env(platform: str, suffix: str, default: str) -> str:
     key = f"{platform.upper()}_{suffix}"
@@ -84,10 +90,13 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
 
     Shared:
       CRAWL_LOOKBACK_DAYS (default 14)
+      CRAWL_DISCOVERY_LIMIT (default 300) — search candidate pool
+      CRAWL_FINAL_LIMIT (default 100) — newest kept after timestamp sort
       CRAWL_MAX_STALE_DETAILS_PER_KEYWORD (default 25)
       CRAWL_CONSECUTIVE_STALE_CONTENT_STOP (default 0 = disabled)
 
-    Per-platform overrides use PREFIX_* (FACEBOOK_*, TIKTOK_*, THREADS_*, INSTAGRAM_*).
+    Per-platform overrides: PREFIX_DISCOVERY_LIMIT / PREFIX_FINAL_LIMIT
+    Legacy aliases (map to FINAL): FACEBOOK_MAX_POSTS*, TIKTOK_MAX_VIDEOS, etc.
     """
     p = platform.lower().strip()
     lookback_days = float(_platform_env(p, "LOOKBACK_DAYS", "14") or "14")
@@ -95,7 +104,8 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
 
     defaults = {
         "facebook": {
-            "max_new": 100,
+            "discovery": 300,
+            "final": 100,
             "scroll": 80,
             "runtime": 900,
             "keyword_runtime": 300,
@@ -107,7 +117,8 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
             "stale_stop": 0,
         },
         "tiktok": {
-            "max_new": 200,
+            "discovery": 300,
+            "final": 100,
             "scroll": 240,
             "runtime": 600,
             "keyword_runtime": 240,
@@ -119,7 +130,8 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
             "stale_stop": 0,
         },
         "threads": {
-            "max_new": 40,
+            "discovery": 300,
+            "final": 100,
             "scroll": 240,
             "runtime": 600,
             "keyword_runtime": 240,
@@ -132,7 +144,8 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
             "stale_stop": 12,
         },
         "instagram": {
-            "max_new": 100,
+            "discovery": 300,
+            "final": 100,
             "scroll": 120,
             "runtime": 420,
             "keyword_runtime": 180,
@@ -143,22 +156,72 @@ def load_freshness_policy(platform: str) -> FreshnessPolicy:
             "comment_idle": 6,
             "stale_stop": 0,
         },
+        "youtube": {
+            "discovery": 300,
+            "final": 100,
+            "scroll": 80,
+            "runtime": 300,
+            "keyword_runtime": 180,
+            "idle": 6,
+            "empty": 5,
+            "comments": 200,
+            "comment_scroll": 40,
+            "comment_idle": 5,
+            "stale_stop": 0,
+        },
+        "google_maps": {
+            "discovery": 300,
+            "final": 100,
+            "scroll": 8,
+            "runtime": 600,
+            "keyword_runtime": 300,
+            "idle": 3,
+            "empty": 3,
+            "comments": 500,
+            "comment_scroll": 8,
+            "comment_idle": 3,
+            "stale_stop": 0,
+        },
     }
     d = defaults.get(p, defaults["tiktok"])
 
-    max_new = env_int(
-        f"{p.upper()}_MAX_POSTS" if p != "tiktok" else "TIKTOK_MAX_VIDEOS",
-        env_int(f"{p.upper()}_MAX_URLS_PER_KEYWORD", d["max_new"]),
+    discovery = env_int(
+        f"{p.upper()}_DISCOVERY_LIMIT",
+        env_int("CRAWL_DISCOVERY_LIMIT", d["discovery"]),
     )
-    if p == "threads":
-        max_new = env_int("THREADS_MAX_URLS_PER_KEYWORD", env_int("THREADS_MAX_THREADS", d["max_new"]))
-    if p == "facebook":
-        max_new = env_int("FACEBOOK_MAX_POSTS_PER_KEYWORD", env_int("FACEBOOK_MAX_POSTS", d["max_new"]))
+    # Legacy MAX_* aliases feed FINAL (kept newest), not discovery.
+    legacy_final = d["final"]
+    if p == "tiktok":
+        legacy_final = env_int("TIKTOK_MAX_VIDEOS", legacy_final)
+    elif p == "threads":
+        legacy_final = env_int(
+            "THREADS_MAX_URLS_PER_KEYWORD",
+            env_int("THREADS_MAX_THREADS", legacy_final),
+        )
+    elif p == "facebook":
+        legacy_final = env_int(
+            "FACEBOOK_MAX_POSTS_PER_KEYWORD",
+            env_int("FACEBOOK_MAX_POSTS", legacy_final),
+        )
+    elif p == "instagram":
+        legacy_final = env_int("INSTAGRAM_MAX_POSTS", legacy_final)
+    elif p == "youtube":
+        legacy_final = env_int("YOUTUBE_MAX_VIDEOS", legacy_final)
+    else:
+        legacy_final = env_int(f"{p.upper()}_MAX_URLS_PER_KEYWORD", legacy_final)
+
+    final = env_int(
+        f"{p.upper()}_FINAL_LIMIT",
+        env_int("CRAWL_FINAL_LIMIT", legacy_final),
+    )
+    discovery = max(1, discovery)
+    final = max(1, min(final, discovery))
 
     return FreshnessPolicy(
         platform=p,
         lookback=timedelta(days=lookback_days),
-        max_new_urls_per_keyword=max(1, max_new),
+        discovery_limit=discovery,
+        final_limit=final,
         max_scroll_rounds=env_int(f"{p.upper()}_MAX_SCROLL_ROUNDS", d["scroll"]),
         max_runtime_seconds=env_int(f"{p.upper()}_MAX_RUNTIME_SECONDS", d["runtime"]),
         keyword_runtime_seconds=env_int(f"{p.upper()}_KEYWORD_RUNTIME_SECONDS", d["keyword_runtime"]),
@@ -356,3 +419,77 @@ def classify_detail_freshness(
     if stale is False:
         return "fresh"
     return "unknown"
+
+
+_TIME_FIELDS = (
+    "created_time",
+    "created_at",
+    "published_at",
+    "upload_date",
+    "taken_at_timestamp",
+    "timestamp",
+    "content_timestamp",
+)
+
+
+def content_time_sort_key(item: object, fields: tuple[str, ...] = _TIME_FIELDS) -> str:
+    """ISO UTC string for reverse-sort; empty sorts last when reverse=True."""
+    if not isinstance(item, dict):
+        return ""
+    for field_name in fields:
+        parsed = parse_content_timestamp(item.get(field_name))
+        if parsed is not None:
+            return parsed.astimezone(timezone.utc).isoformat()
+    return ""
+
+
+def select_newest(items: list, limit: int, fields: tuple[str, ...] = _TIME_FIELDS) -> list:
+    """Return up to ``limit`` items with the newest content timestamps."""
+    if limit <= 0:
+        return []
+    ranked = sorted(items, key=lambda x: content_time_sort_key(x, fields), reverse=True)
+    return ranked[:limit]
+
+
+def attach_freshness_fields(
+    record: dict,
+    content_timestamp: object,
+    policy: FreshnessPolicy,
+    *,
+    now: datetime | None = None,
+    newest_rank: int | None = None,
+    in_final_limit: bool | None = None,
+) -> dict:
+    """
+    Annotate a crawl record without dropping it.
+
+    Business rules (import / comment spend) read ``freshness`` / ``in_final_limit``.
+    Discovery/detail must keep the row even when stale.
+    """
+    ref = now or datetime.now(timezone.utc)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    parsed = parse_content_timestamp(content_timestamp, reference=ref)
+    freshness = classify_detail_freshness(content_timestamp, policy, now=ref)
+    published = parsed.astimezone(timezone.utc).isoformat() if parsed else None
+    record["published_at"] = published or record.get("published_at")
+    if parsed is not None and not record.get("created_time"):
+        record["created_time"] = published
+    record["discovered_at"] = ref.astimezone(timezone.utc).isoformat()
+    record["freshness"] = freshness
+    record["stale"] = freshness == "stale"
+    if newest_rank is not None:
+        record["newest_rank"] = newest_rank
+    if in_final_limit is not None:
+        record["in_final_limit"] = in_final_limit
+    # Coverage = in final window AND not validated-stale (unknown still eligible).
+    if in_final_limit is False or freshness == "stale":
+        record["coverage"] = False
+    elif in_final_limit is True:
+        record["coverage"] = True
+    return record
+
+
+def should_spend_on_comments(freshness: str) -> bool:
+    """Expensive comment pagination only for non-stale items."""
+    return freshness != "stale"
