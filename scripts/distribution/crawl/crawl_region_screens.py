@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -68,7 +69,11 @@ def http_get(url: str, accept: str = "*/*", timeout: int = 25) -> bytes:
             "Accept-Language": "vi-VN,vi;q=0.9",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl_context) as resp:
         return resp.read()
 
 
