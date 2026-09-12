@@ -9,11 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -31,7 +27,11 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.chromedriver_utils import leave_chrome_open
+from social_listening.crawl_reliability import (
+    assert_social_session,
+    attach_debugger_chrome,
+)
 from social_listening.crawl_freshness import (
     attach_freshness_fields,
     content_time_sort_key,
@@ -145,7 +145,7 @@ def main() -> int:
             print(f"saved {len(records)} total youtube payloads to {OUTPUT_FILE.resolve()}")
             return 0
         finally:
-            driver.quit()
+            leave_chrome_open(driver)
 
 
 def resolve_input_file() -> Path:
@@ -276,24 +276,10 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
 
 
 def build_driver() -> webdriver.Chrome:
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-    options.add_argument("--lang=vi-VN")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--window-size=1440,2200")
-    driver_path = resolve_chromedriver_path()
-    try:
-        if driver_path:
-            return webdriver.Chrome(service=Service(driver_path), options=options)
-        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except SessionNotCreatedException as exc:
-        raise RuntimeError(
-            "Cannot connect to Chrome remote debugging at "
-            f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-            "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-            "--remote-debugging-port=9225 "
-            "--user-data-dir=/tmp/chrome-codex-youtube"
-        ) from exc
+    print(f"[youtube-detail] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
+    assert_social_session(driver, "youtube")
+    return driver
 
 
 def expand_video_page(driver: webdriver.Chrome) -> None:

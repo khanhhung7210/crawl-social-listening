@@ -46,8 +46,12 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
+from social_listening.chromedriver_utils import chrome_debugger_ready, leave_chrome_open
 from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
+from social_listening.crawl_reliability import (
+    assert_social_session,
+    attach_debugger_chrome,
+)
 
 # Sort / freshness URL params (smoke 2026-09-11, keyword "rạp galaxy"):
 # - sp=CAI%3D  Upload date: works but STILL mixes multi-year-old videos at top
@@ -565,27 +569,10 @@ def ensure_youtube_debug_chrome() -> None:
 
 def build_driver() -> webdriver.Chrome:
     ensure_youtube_debug_chrome()
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-    options.add_argument("--lang=vi-VN")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--window-size=1440,2200")
-    try:
-        return webdriver.Chrome(options=options)
-    except SessionNotCreatedException:
-        driver_path = resolve_chromedriver_path()
-        try:
-            if driver_path:
-                return webdriver.Chrome(service=Service(driver_path), options=options)
-            return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except SessionNotCreatedException as exc:
-            raise RuntimeError(
-                "Cannot connect to Chrome remote debugging at "
-                f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-                "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-                "--remote-debugging-port=9225 --remote-allow-origins=* "
-                f"--user-data-dir={youtube_chrome_profile_dir()}"
-            ) from exc
+    print(f"[youtube-search] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
+    assert_social_session(driver, "youtube")
+    return driver
 
 
 
