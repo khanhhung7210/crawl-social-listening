@@ -98,6 +98,9 @@ def main() -> int:
                 ensure_place_page(driver)
                 # Official 4.3 / 9.363 lives on Overview; Reviews tab drops the F7nice block.
                 place_metadata = extract_place_metadata(driver)
+                place_url = str(driver.current_url or url)
+                if "accounts.google.com" in place_url or "/signin" in place_url:
+                    place_url = url
                 print(
                     f"[google-maps-review] place_rating={place_metadata.get('rating_text')!r} "
                     f"place_reviews={place_metadata.get('review_count_text')!r} "
@@ -129,10 +132,13 @@ def main() -> int:
                         f"[google-maps-review] review extract failed (keeping place metadata): {review_exc}",
                         flush=True,
                     )
+                current = str(driver.current_url or place_url)
+                if "accounts.google.com" in current or "/signin" in current:
+                    current = place_url
                 items.append(
                     {
                         "url": url,
-                        "current_url": str(driver.current_url or url),
+                        "current_url": current,
                         "search_keyword": str(entry.get("search_keyword") or entry.get("keyword") or "").strip(),
                         "crawled_at": datetime.now(timezone.utc).isoformat(),
                         "review_sort": "most_recent" if sort_ok else "default",
