@@ -8,11 +8,7 @@ import time
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -30,7 +26,11 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.chromedriver_utils import leave_chrome_open
+from social_listening.crawl_reliability import (
+    assert_social_session,
+    attach_debugger_chrome,
+)
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
     classify_detail_freshness,
@@ -82,49 +82,76 @@ def main() -> int:
         started_by_keyword: dict[str, float] = {}
         stats_by_keyword: dict[str, KeywordCrawlStats] = {}
 
+        ensure_dir(OUTPUT_FILE.parent)
+        records = load_existing_records(OUTPUT_FILE)
+        processed_urls = {
+            normalize_thread_url(str(item.get("url") or "").strip())
+            for item in records
+            if isinstance(item, dict)
+        }
+        processed_urls.discard("")
+
+        pending_items = [item for item in thread_urls if item["url"] not in processed_urls]
+        skipped_already = len(thread_urls) - len(pending_items)
+
+        print(f"[threads-detail] Total URLs in input: {len(thread_urls)}")
+        print(f"[threads-detail] Already processed: {len(processed_urls)}")
+        print(f"[threads-detail] Pending detail: {len(pending_items)} (skipped_listed={skipped_already})")
+        print(
+            f"[threads-detail] Policy lookback={POLICY.lookback_days:.1f}d "
+            f"reply_scroll={MAX_SCROLL_ROUNDS_PER_THREAD} max_replies={MAX_REPLIES} "
+            f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+        )
+
+        if not pending_items:
+            print("[threads-detail] No pending URLs — nothing to detail this round")
+            state.complete_run(
+                run_id,
+                urls_discovered=len(thread_urls),
+                urls_crawled=0,
+                urls_skipped=skipped_already,
+                keywords_processed=0,
+            )
+            return 0
+
         driver = build_driver()
         try:
-            ensure_dir(OUTPUT_FILE.parent)
-            records = load_existing_records(OUTPUT_FILE)
-            processed_urls = {
-                normalize_thread_url(str(item.get("url") or "").strip())
-                for item in records
-                if isinstance(item, dict)
-            }
-
-            print(f"[threads-detail] Total URLs to process: {len(thread_urls)}")
-            print(f"[threads-detail] Already processed: {len(processed_urls)}")
-            print(
-                f"[threads-detail] Policy lookback={POLICY.lookback_days:.1f}d "
-                f"reply_scroll={MAX_SCROLL_ROUNDS_PER_THREAD} max_replies={MAX_REPLIES}"
-            )
-
             crawled_count = 0
-            skipped_count = 0
+            skipped_count = skipped_already
             stale_count = 0
             failed_count = 0
-            total = len(thread_urls)
+            runtime_skipped = 0
+            total = len(pending_items)
 
-            for index, item in enumerate(thread_urls, start=1):
+            for index, item in enumerate(pending_items, start=1):
                 url = item["url"]
                 search_keyword = item["keyword"]
                 search_keywords = item.get("keywords") or ([search_keyword] if search_keyword else [])
                 kw_stats = stats_by_keyword.setdefault(
                     search_keyword, KeywordCrawlStats(keyword=search_keyword or "(none)")
                 )
-                started_by_keyword.setdefault(search_keyword, time.monotonic())
-
-                if url in processed_urls:
-                    print(f"[{index}/{total}] skip already processed {url}")
-                    skipped_count += 1
-                    continue
 
                 if should_stop_keyword_details(stale_by_keyword.get(search_keyword, 0), POLICY):
-                    print(f"[threads-detail] skip remaining for keyword={search_keyword}: max_stale_details")
+                    print(
+                        f"[threads-detail] skip remaining for keyword={search_keyword}: max_stale_details",
+                        flush=True,
+                    )
                     continue
-                if time.monotonic() - started_by_keyword[search_keyword] >= DETAIL_KEYWORD_RUNTIME_SECONDS:
-                    print(f"[threads-detail] skip remaining for keyword={search_keyword}: keyword_runtime_limit")
+
+                # Start runtime clock only when we actually attempt a crawl for this keyword
+                # (not while scanning already-processed URLs in a 16k backlog).
+                started = started_by_keyword.get(search_keyword)
+                if started is not None and (
+                    time.monotonic() - started >= DETAIL_KEYWORD_RUNTIME_SECONDS
+                ):
+                    runtime_skipped += 1
+                    print(
+                        f"[threads-detail] skip remaining for keyword={search_keyword}: keyword_runtime_limit",
+                        flush=True,
+                    )
                     continue
+                if search_keyword not in started_by_keyword:
+                    started_by_keyword[search_keyword] = time.monotonic()
 
                 try:
                     record = crawl_thread(driver, url, search_keyword, search_keywords, search_terms)
@@ -144,7 +171,7 @@ def main() -> int:
                     records.append(record)
                     processed_urls.add(url)
                     save_records(records, OUTPUT_FILE)
-                    print(f"[{index}/{total}] failed {url}")
+                    print(f"[{index}/{total}] failed {url}", flush=True)
                     continue
 
                 content_timestamp = (
@@ -178,12 +205,11 @@ def main() -> int:
                             "coverage": False,
                             "created_time": content_timestamp,
                             "timestamp": content_timestamp,
-                            "articles": [],
                         }
                     )
                     processed_urls.add(url)
                     save_records(records, OUTPUT_FILE)
-                    print(f"[{index}/{total}] stale-skip {url} created_time={content_timestamp}")
+                    print(f"[{index}/{total}] stale {url}", flush=True)
                     continue
 
                 crawled_count += 1
@@ -191,7 +217,10 @@ def main() -> int:
                 records.append(record)
                 processed_urls.add(url)
                 save_records(records, OUTPUT_FILE)
-                print(f"[{index}/{total}] {url} freshness={freshness} replies_crawled={reply_n}")
+                print(
+                    f"[{index}/{total}] {url} freshness={freshness} replies_crawled={reply_n}",
+                    flush=True,
+                )
 
             for kw, kw_stats in stats_by_keyword.items():
                 kw_stats.runtime_seconds = time.monotonic() - started_by_keyword.get(kw, time.monotonic())
@@ -199,22 +228,23 @@ def main() -> int:
 
             state.complete_run(
                 run_id,
-                urls_discovered=total,
+                urls_discovered=len(thread_urls),
                 urls_crawled=crawled_count,
-                urls_skipped=skipped_count + stale_count,
-                keywords_processed=len(set(item.get("keyword", "") for item in thread_urls)),
+                urls_skipped=skipped_count + stale_count + runtime_skipped,
+                keywords_processed=len(stats_by_keyword),
             )
 
-            print(f"[threads-detail] Summary:")
-            print(f"  - Fresh coverage saved: {crawled_count}")
-            print(f"  - Stale skipped: {stale_count}")
-            print(f"  - Failed: {failed_count}")
-            print(f"  - Already processed: {skipped_count}")
-            print(f"  - Total saved: {len(records)}")
-            print(f"  - Output: {OUTPUT_FILE.resolve()}")
+            print("[threads-detail] Summary:", flush=True)
+            print(f"  - Fresh coverage saved: {crawled_count}", flush=True)
+            print(f"  - Stale skipped: {stale_count}", flush=True)
+            print(f"  - Failed: {failed_count}", flush=True)
+            print(f"  - Already processed (prefiltered): {skipped_count}", flush=True)
+            print(f"  - Runtime-limit skipped: {runtime_skipped}", flush=True)
+            print(f"  - Total saved: {len(records)}", flush=True)
+            print(f"  - Output: {OUTPUT_FILE.resolve()}", flush=True)
             return 0
         finally:
-            driver.quit()
+            leave_chrome_open(driver)
 
 
 def resolve_input_file() -> Path:
@@ -428,22 +458,10 @@ def expand_reply_buttons(driver: webdriver.Chrome) -> None:
 
 
 def build_driver() -> webdriver.Chrome:
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-
-    driver_path = resolve_chromedriver_path()
-    try:
-        if driver_path:
-            return webdriver.Chrome(service=Service(driver_path), options=options)
-        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except SessionNotCreatedException as exc:
-        raise RuntimeError(
-            "Cannot connect to Chrome remote debugging at "
-            f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-            "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-            "--remote-debugging-port=9222 "
-            "--user-data-dir=/tmp/chrome-codex-threads"
-        ) from exc
+    print(f"[threads-detail] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
+    assert_social_session(driver, "threads")
+    return driver
 
 
 def normalize_thread_url(url: str) -> str:

@@ -171,7 +171,7 @@ def main() -> int:
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
             return 0
         finally:
-            driver.quit()
+            leave_chrome_open(driver)
 
 
 def search_videos_for_keyword_incremental(
