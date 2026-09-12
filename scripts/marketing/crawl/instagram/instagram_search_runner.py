@@ -3,17 +3,34 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote
 
 from selenium import webdriver
+from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
+
+
+def _ensure_utf8_stdio() -> None:
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_ensure_utf8_stdio()
+
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -30,11 +47,10 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import resolve_chromedriver_path
+from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
 from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
 
 
-INSTAGRAM_SEARCH_URL = "https://www.instagram.com/explore/search/keyword/?q={query}"
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
 POLICY = load_freshness_policy("instagram")
 DISCOVERY_LIMIT = POLICY.discovery_limit
@@ -43,13 +59,24 @@ MAX_POSTS = DISCOVERY_LIMIT
 MAX_SCROLL_ROUNDS = POLICY.max_scroll_rounds
 IDLE_ROUNDS_BEFORE_STOP = POLICY.idle_rounds_before_stop
 SCROLL_PAUSE_SECONDS = float(os.getenv("INSTAGRAM_SCROLL_PAUSE_SECONDS", "2.5"))
+PAGE_LOAD_WAIT_SECONDS = float(os.getenv("INSTAGRAM_PAGE_LOAD_WAIT_SECONDS", "6.0"))
 MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 
+# Smoke 2026-09-11:
+# - No reliable Recent/Latest UI on keyword search
+# - /explore/search/keyword/?q= and /explore/search/?q= return different post sets
+# - #hashtag keyword search (e.g. #galaxycinema) also differs; useful for brand tags
+# Newest remains best-effort; detail sorts by created_at → FINAL.
+
 
 def main() -> int:
     search_terms = collect_search_terms(load_keyword_payload())
+    keyword_limit = int(os.getenv("INSTAGRAM_KEYWORD_LIMIT", "0") or "0")
+    if keyword_limit > 0:
+        search_terms = search_terms[:keyword_limit]
+        print(f"[instagram-search] INSTAGRAM_KEYWORD_LIMIT={keyword_limit}")
     if not search_terms:
         raise RuntimeError("No search terms found in shared keyword config")
 
@@ -67,8 +94,8 @@ def main() -> int:
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[instagram-search] Note: newest is BEST-EFFORT (no reliable Recent UI); "
-            "discover candidates — detail sorts by created_at then keeps FINAL"
+            "[instagram-search] Note: no reliable Recent UI; crawl keyword + explore + "
+            "hashtag SERPs then merge; FINAL newest sort happens at detail"
         )
 
         run_id = state.start_run("instagram", run_type)
@@ -101,13 +128,17 @@ def main() -> int:
                     if url in global_seen:
                         continue
                     global_seen.add(url)
-                    new_results.append({
-                        "keyword": keyword,
-                        "url": url,
-                        "status": search_result["status"],
-                        "reason": search_result.get("reason", ""),
-                        "pending_detail": True,
-                    })
+                    modes = sorted(search_result.get("url_modes", {}).get(url) or [])
+                    new_results.append(
+                        {
+                            "keyword": keyword,
+                            "url": url,
+                            "status": search_result["status"],
+                            "reason": search_result.get("reason", ""),
+                            "search_modes": modes,
+                            "pending_detail": True,
+                        }
+                    )
 
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
@@ -126,7 +157,7 @@ def main() -> int:
                 keywords_processed=len(search_terms),
             )
 
-            print(f"[instagram-search] Summary:")
+            print("[instagram-search] Summary:")
             print(f"  - Discovered (all keywords): {urls_discovered}")
             print(f"  - New URLs queued for detail: {urls_new}")
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
@@ -140,79 +171,188 @@ def search_posts_for_keyword(
     keyword: str,
     existing_urls: set[str],
 ) -> dict:
-    driver.get(INSTAGRAM_SEARCH_URL.format(query=quote(keyword)))
-    time.sleep(6)
-    started_at = time.monotonic()
-
     urls: list[str] = []
+    url_modes: dict[str, set[str]] = {}
     local_seen: set[str] = set()
     all_discovered: list[str] = []
-    idle_rounds = 0
     already_seen = 0
-    scroll_rounds = 0
-    stop_reason = "scroll_exhausted"
+    stop_reason = "no_results"
+    keyword_started = time.monotonic()
+    planned = resolve_search_urls(keyword)
+    mode_budget = max(8, MAX_POSTS // max(1, len(planned)))
+    mode_counts: dict[str, int] = {}
 
-    for _ in range(MAX_SCROLL_ROUNDS):
-        scroll_rounds += 1
-        elapsed = time.monotonic() - started_at
-
-        if elapsed >= KEYWORD_RUNTIME_SECONDS:
+    for search_url, mode in planned:
+        if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
             stop_reason = "keyword_runtime_limit"
             break
-        if elapsed >= MAX_RUNTIME_SECONDS:
-            stop_reason = "runtime_limit"
+        if len(urls) >= MAX_POSTS:
+            stop_reason = "max_posts_reached"
             break
+        if mode_counts.get(mode, 0) >= mode_budget:
+            continue
 
-        before_count = len(urls)
+        driver.get(search_url)
+        time.sleep(PAGE_LOAD_WAIT_SECONDS)
+        if page_unavailable(driver):
+            print(f"[instagram-search] keyword={keyword} mode={mode} unavailable", flush=True)
+            continue
+        print(f"[instagram-search] keyword={keyword} mode={mode} serp=on via=url", flush=True)
 
-        for anchor in driver.find_elements(By.TAG_NAME, "a"):
-            href = (anchor.get_attribute("href") or "").strip()
-            normalized = normalize_instagram_post_url(href)
-            if not normalized or normalized in local_seen:
-                continue
+        started_at = time.monotonic()
+        idle_rounds = 0
+        scroll_rounds = 0
+        mode_full = False
+        duplicate_only_rounds = 0
 
-            local_seen.add(normalized)
-            all_discovered.append(normalized)
-
-            if normalized in existing_urls:
-                already_seen += 1
-                continue
-
-            urls.append(normalized)
-            if len(urls) >= MAX_POSTS:
-                stop_reason = "max_posts_reached"
+        for _ in range(MAX_SCROLL_ROUNDS):
+            scroll_rounds += 1
+            elapsed_keyword = time.monotonic() - keyword_started
+            elapsed_mode = time.monotonic() - started_at
+            if elapsed_keyword >= KEYWORD_RUNTIME_SECONDS:
+                stop_reason = "keyword_runtime_limit"
+                break
+            if elapsed_mode >= MAX_RUNTIME_SECONDS:
+                stop_reason = "runtime_limit"
                 break
 
-        if stop_reason == "max_posts_reached":
+            before_count = len(urls)
+            before_seen = len(local_seen)
+            page_hits = 0
+
+            for href in get_anchor_hrefs(driver):
+                normalized = normalize_instagram_post_url(href)
+                if not normalized:
+                    continue
+                page_hits += 1
+                if normalized in local_seen:
+                    url_modes.setdefault(normalized, set()).add(mode)
+                    continue
+                local_seen.add(normalized)
+                all_discovered.append(normalized)
+                url_modes.setdefault(normalized, set()).add(mode)
+                if normalized in existing_urls:
+                    already_seen += 1
+                    continue
+                urls.append(normalized)
+                mode_counts[mode] = mode_counts.get(mode, 0) + 1
+                if mode_counts[mode] >= mode_budget:
+                    mode_full = True
+                    stop_reason = f"{mode}_budget_reached"
+                    break
+                if len(urls) >= MAX_POSTS:
+                    stop_reason = "max_posts_reached"
+                    break
+
+            if stop_reason == "max_posts_reached" or mode_full:
+                break
+
+            if page_hits > 0 and len(local_seen) == before_seen:
+                duplicate_only_rounds += 1
+            else:
+                duplicate_only_rounds = 0
+            if duplicate_only_rounds >= 2:
+                stop_reason = f"{mode}_duplicates_only"
+                break
+
+            idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
+            if scroll_rounds % 5 == 0 or idle_rounds == 0:
+                print(
+                    f"[instagram-search] keyword={keyword} mode={mode} "
+                    f"discovered={len(all_discovered)} queued={len(urls)} "
+                    f"mode_count={mode_counts.get(mode, 0)}/{mode_budget} idle={idle_rounds}",
+                    flush=True,
+                )
+            if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
+                stop_reason = "idle_limit"
+                break
+
+            scroll_search_results(driver)
+            time.sleep(SCROLL_PAUSE_SECONDS)
+
+        if stop_reason in {"keyword_runtime_limit", "runtime_limit", "max_posts_reached"}:
             break
+        if stop_reason.endswith("_duplicates_only") or stop_reason.endswith("_budget_reached") or stop_reason == "idle_limit":
+            continue
 
-        idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-        if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
-            stop_reason = "idle_limit"
-            break
-
-        if scroll_rounds % 20 == 0:
-            print(
-                f"[instagram-search] keyword={keyword} round={scroll_rounds} "
-                f"new_urls={len(urls)} discovered={len(all_discovered)} "
-                f"already_seen={already_seen}"
-            )
-
-        scroll_search_results(driver)
-        time.sleep(SCROLL_PAUSE_SECONDS)
-
+    url_modes_out = {u: sorted(m) for u, m in url_modes.items()}
     stats = KeywordCrawlStats(
         keyword=keyword,
         discovered=len(all_discovered),
         new=len(urls),
         already_seen=already_seen,
-        runtime_seconds=time.monotonic() - started_at,
+        runtime_seconds=time.monotonic() - keyword_started,
         stop_reason=stop_reason,
+        extras={
+            **{f"{k}_count": v for k, v in mode_counts.items()},
+            "mode_budget": mode_budget,
+        },
     )
     status = "ok" if urls else ("partial" if all_discovered else "no_results")
     if stop_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
         status = "partial"
-    return {"urls": urls, "status": status, "reason": stop_reason, "stats": stats}
+
+    # Leave browser on primary keyword SERP.
+    try:
+        driver.get(f"https://www.instagram.com/explore/search/keyword/?q={quote(keyword)}")
+        time.sleep(1.0)
+    except Exception:
+        pass
+
+    return {
+        "urls": urls,
+        "url_modes": url_modes_out,
+        "status": status,
+        "reason": stop_reason,
+        "stats": stats,
+    }
+
+
+def slugify_hashtag(keyword: str) -> str:
+    text = unicodedata.normalize("NFKD", keyword or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "", text)
+    return text
+
+
+def resolve_search_urls(keyword: str) -> list[tuple[str, str]]:
+    q = quote(keyword)
+    urls = [
+        (f"https://www.instagram.com/explore/search/keyword/?q={q}", "keyword"),
+        (f"https://www.instagram.com/explore/search/?q={q}", "explore"),
+    ]
+    tag = slugify_hashtag(keyword)
+    low = (keyword or "").casefold()
+    # Brand boost before slug hashtag so #galaxycinema always gets a share of budget.
+    if "galaxy" in low and "cinema" not in tag:
+        urls.append(
+            (
+                f"https://www.instagram.com/explore/search/keyword/?q={quote('#galaxycinema')}",
+                "hashtag_galaxycinema",
+            )
+        )
+    if tag and len(tag) >= 4:
+        urls.append(
+            (f"https://www.instagram.com/explore/search/keyword/?q={quote('#' + tag)}", "hashtag")
+        )
+    # Dedupe URLs keep order
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for url, mode in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((url, mode))
+    return out
+
+
+def page_unavailable(driver: webdriver.Chrome) -> bool:
+    try:
+        body = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
+    except Exception:
+        return False
+    return "isn't available" in body or "không khả dụng" in body
 
 
 def load_existing_results() -> list[dict]:
@@ -239,13 +379,62 @@ def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
     return sorted(by_url.values(), key=lambda x: x.get("url", ""))
 
 
+def instagram_chrome_profile_dir() -> Path:
+    return PROJECT_ROOT / "runtime" / "chrome" / "instagram"
+
+
+def ensure_instagram_debug_chrome() -> None:
+    if chrome_debugger_ready(DEBUGGER_ADDRESS):
+        return
+    host, port_text = DEBUGGER_ADDRESS.rsplit(":", 1)
+    profile_dir = instagram_chrome_profile_dir()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if not Path(chrome_bin).is_file():
+        raise RuntimeError(f"Google Chrome not found at {chrome_bin}")
+    cmd = [
+        chrome_bin,
+        f"--remote-debugging-port={port_text}",
+        f"--remote-debugging-address={host}",
+        "--remote-allow-origins=*",
+        f"--user-data-dir={profile_dir}",
+        "--disable-blink-features=AutomationControlled",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "about:blank",
+    ]
+    print(f"[instagram-search] starting debug Chrome on {DEBUGGER_ADDRESS}")
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(30):
+        time.sleep(1)
+        if chrome_debugger_ready(DEBUGGER_ADDRESS):
+            print(f"[instagram-search] debug Chrome ready on {DEBUGGER_ADDRESS}")
+            return
+    raise RuntimeError(
+        f"Chrome debug did not start on {DEBUGGER_ADDRESS}. Try manually: {' '.join(cmd)}"
+    )
+
+
 def build_driver() -> webdriver.Chrome:
+    ensure_instagram_debug_chrome()
     options = Options()
     options.debugger_address = DEBUGGER_ADDRESS
-    driver_path = resolve_chromedriver_path()
-    if driver_path:
-        return webdriver.Chrome(service=Service(driver_path), options=options)
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    try:
+        return webdriver.Chrome(options=options)
+    except SessionNotCreatedException:
+        driver_path = resolve_chromedriver_path()
+        try:
+            if driver_path:
+                return webdriver.Chrome(service=Service(driver_path), options=options)
+            return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        except SessionNotCreatedException as exc:
+            raise RuntimeError(
+                "Cannot connect to Chrome remote debugging at "
+                f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
+                "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
+                "--remote-debugging-port=9224 --remote-allow-origins=* "
+                f"--user-data-dir={instagram_chrome_profile_dir()}"
+            ) from exc
 
 
 def scroll_search_results(driver: webdriver.Chrome) -> None:
@@ -269,9 +458,22 @@ def scroll_search_results(driver: webdriver.Chrome) -> None:
     )
     if scroll_target == "window":
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-
     body = driver.find_element(By.TAG_NAME, "body")
     body.send_keys(Keys.END)
+
+
+def get_anchor_hrefs(driver: webdriver.Chrome) -> list[str]:
+    try:
+        hrefs = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll('a'))
+              .map((anchor) => anchor.href || '')
+              .filter(Boolean);
+            """
+        )
+    except WebDriverException:
+        return []
+    return [str(href).strip() for href in hrefs if str(href).strip()]
 
 
 def normalize_instagram_post_url(url: str) -> str:

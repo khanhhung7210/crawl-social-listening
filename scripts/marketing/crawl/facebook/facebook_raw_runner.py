@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -10,6 +11,20 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
+
+
+def _ensure_utf8_stdio() -> None:
+    """Avoid Windows cp1252 UnicodeEncodeError on Vietnamese keyword prints."""
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_ensure_utf8_stdio()
 
 from selenium import webdriver
 from selenium.common.exceptions import InvalidSessionIdException, SessionNotCreatedException, WebDriverException
@@ -50,7 +65,20 @@ from social_listening.crawl_freshness import (
 )
 
 
+# Native FB Recent-posts filter (same payload as UI "Bài viết mới đây" / recent_posts).
+# Prefer URL injection over sidebar clicks — clicks are flaky / fail-soft and yield stale Top SERP.
+_RECENT_POSTS_FILTER_JSON = json.dumps(
+    {"recent_posts:0": json.dumps({"name": "recent_posts", "args": ""}, separators=(",", ":"))},
+    separators=(",", ":"),
+)
+RECENT_POSTS_FILTER_PARAM = quote(base64.b64encode(_RECENT_POSTS_FILTER_JSON.encode("utf-8")).decode("ascii"))
+
 FACEBOOK_SEARCH_URLS = [
+    # Hard-wire Recent first (matches FB share URL with filters=recent_posts).
+    f"https://www.facebook.com/search/posts?q={{query}}&filters={RECENT_POSTS_FILTER_PARAM}",
+    f"https://www.facebook.com/search/top?q={{query}}&filters={RECENT_POSTS_FILTER_PARAM}&locale=vi_VN",
+    f"https://www.facebook.com/search/posts/?q={{query}}&filters={RECENT_POSTS_FILTER_PARAM}",
+    # Unfiltered fallbacks — UI click for Recent may still rescue these.
     "https://www.facebook.com/search/posts?q={query}",
     "https://www.facebook.com/search/posts/?q={query}",
     "https://www.facebook.com/search/top/?q={query}",
@@ -132,9 +160,8 @@ def main(force: bool = False) -> int:
             f"max_stale_details={POLICY.max_stale_details_per_keyword}"
         )
         print(
-            "[facebook-search] Note: enable Posts + Recent when available; "
-            "no early-stop on consecutive previously-seen URLs; "
-            "stale posts kept with freshness tag (comments skipped)"
+            "[facebook-search] Note: open search with filters=recent_posts URL first; "
+            "UI Recent click is backup only; stale posts kept with freshness tag (comments skipped)"
         )
 
         run_id = state.start_run("facebook", run_type)
@@ -327,12 +354,32 @@ def search_posts_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
     return {"urls": urls, "status": "ok" if urls else "no_results", "reason": "scroll_exhausted"}
 
 
+def recent_posts_filter_in_url(url: str) -> bool:
+    """True when current FB search URL already carries recent_posts filter payload."""
+    lower = (url or "").lower()
+    if "recent_posts" in lower:
+        return True
+    try:
+        filters = parse_qs(urlparse(url).query).get("filters", [])
+        for raw in filters:
+            try:
+                decoded = base64.b64decode(raw + "===").decode("utf-8", errors="ignore")
+            except Exception:
+                decoded = raw
+            if "recent_posts" in decoded:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def load_search_results(driver: webdriver.Chrome, keyword: str) -> None:
     encoded_query = quote(keyword)
     last_error = ""
 
     for template in FACEBOOK_SEARCH_URLS:
-        driver.get(template.format(query=encoded_query))
+        target = template.format(query=encoded_query)
+        driver.get(target)
         time.sleep(PAGE_LOAD_WAIT_SECONDS)
         dismiss_dialogs(driver)
         time.sleep(1)
@@ -341,7 +388,7 @@ def load_search_results(driver: webdriver.Chrome, keyword: str) -> None:
             last_error = f"not_found:{template}"
             continue
 
-        if ensure_posts_context(driver, keyword):
+        if ensure_posts_context(driver, keyword, opened_with_recent=recent_posts_filter_in_url(target)):
             return
 
         last_error = f"posts_tab_unavailable:{template}"
@@ -349,10 +396,15 @@ def load_search_results(driver: webdriver.Chrome, keyword: str) -> None:
     raise RuntimeError(f"Unable to open Facebook post search for keyword={keyword} ({last_error})")
 
 
-def ensure_posts_context(driver: webdriver.Chrome, keyword: str) -> bool:
+def ensure_posts_context(
+    driver: webdriver.Chrome,
+    keyword: str,
+    *,
+    opened_with_recent: bool = False,
+) -> bool:
     """
-    1) Enter Posts / Bài viết
-    2) Prefer Recent Posts / Bài viết mới đây (fail-soft if missing)
+    1) Enter Posts / Bài viết when needed
+    2) Prefer Recent via URL filters=recent_posts; UI toggle is backup
     3) Then caller may scroll + collect URLs
     """
     posts_ok = has_post_links(driver)
@@ -385,18 +437,78 @@ def ensure_posts_context(driver: webdriver.Chrome, keyword: str) -> bool:
         posts_ok = submit_search_from_input(driver, keyword)
 
     if posts_ok:
-        recent_ok = ensure_recent_posts_filter(driver)
+        # Posts-tab clicks often drop filters= from the URL — re-check live URL.
+        url_recent = recent_posts_filter_in_url(driver.current_url)
+        ui_recent = url_has_recent_toggle_on(driver)
+
+        if not url_recent and not ui_recent:
+            ui_recent = ensure_recent_posts_filter(driver)
+            url_recent = recent_posts_filter_in_url(driver.current_url)
+
+        if not url_recent and not ui_recent:
+            # Hard re-open with Recent filter (same payload as FB share URL).
+            force_url = (
+                f"https://www.facebook.com/search/posts?q={quote(keyword)}"
+                f"&filters={RECENT_POSTS_FILTER_PARAM}"
+            )
+            try:
+                driver.get(force_url)
+                time.sleep(PAGE_LOAD_WAIT_SECONDS)
+                dismiss_dialogs(driver)
+                url_recent = recent_posts_filter_in_url(driver.current_url)
+                ui_recent = url_has_recent_toggle_on(driver)
+                if not has_post_links(driver):
+                    url_recent = False
+            except Exception:
+                url_recent = False
+        elif url_recent and not ui_recent:
+            # Confirm sidebar toggle if present; do not clear URL-based Recent on miss.
+            ensure_recent_posts_filter(driver)
+            ui_recent = url_has_recent_toggle_on(driver)
+
+        recent_ok = url_recent or ui_recent
+        if url_recent:
+            source = "url"
+        elif ui_recent:
+            source = "ui"
+        else:
+            source = "unavailable"
         print(
             f"[facebook-search] keyword={keyword} posts_context=ok recent_filter="
-            f"{'on' if recent_ok else 'unavailable(fail-soft)'}",
+            f"{'on' if recent_ok else 'unavailable(fail-soft)'} via={source}",
             flush=True,
         )
     return posts_ok
 
 
+def url_has_recent_toggle_on(driver: webdriver.Chrome) -> bool:
+    """Detect sidebar 'Bài viết mới đây' / Recent posts toggle already ON."""
+    try:
+        toggles = driver.find_elements(
+            By.XPATH,
+            "//*[contains(normalize-space(.),'Bài viết mới đây') or "
+            "contains(normalize-space(.),'Recent posts') or "
+            "contains(normalize-space(.),'Recent Posts')]"
+            "/ancestor::*[.//*[@role='switch' or @role='checkbox']][1]"
+            "//*[@role='switch' or @role='checkbox']",
+        )
+        for el in toggles[:4]:
+            if not el.is_displayed():
+                continue
+            checked = (el.get_attribute("aria-checked") or el.get_attribute("aria-pressed") or "").lower()
+            if checked in {"true", "1"}:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def ensure_recent_posts_filter(driver: webdriver.Chrome) -> bool:
-    """Click Recent Posts / Bài viết mới đây when the control exists. Never hard-fail."""
-    # Already on recent?
+    """Turn on Recent Posts / Bài viết mới đây when the control exists. Never hard-fail."""
+    if url_has_recent_toggle_on(driver):
+        return True
+
+    # Already on recent via selected control?
     try:
         active = driver.find_elements(
             By.XPATH,
@@ -412,6 +524,11 @@ def ensure_recent_posts_filter(driver: webdriver.Chrome) -> bool:
         pass
 
     xpaths = (
+        # Sidebar toggle label (VI/EN) — click nearest switch/checkbox/button.
+        "//*[contains(normalize-space(.),'Bài viết mới đây')]/ancestor::*[.//*[@role='switch' or @role='checkbox' or @role='button']][1]"
+        "//*[@role='switch' or @role='checkbox' or @role='button'][1]",
+        "//*[contains(normalize-space(.),'Recent posts')]/ancestor::*[.//*[@role='switch' or @role='checkbox' or @role='button']][1]"
+        "//*[@role='switch' or @role='checkbox' or @role='button'][1]",
         "//span[contains(normalize-space(),'Recent Posts')]/ancestor::a[1]",
         "//span[contains(normalize-space(),'Recent posts')]/ancestor::a[1]",
         "//span[contains(normalize-space(),'Bài viết mới đây')]/ancestor::a[1]",
@@ -445,6 +562,8 @@ def ensure_recent_posts_filter(driver: webdriver.Chrome) -> bool:
                 driver.execute_script("arguments[0].click();", element)
                 time.sleep(PAGE_LOAD_WAIT_SECONDS)
                 dismiss_dialogs(driver)
+                if url_has_recent_toggle_on(driver) or recent_posts_filter_in_url(driver.current_url):
+                    return True
                 return True
         except Exception:
             continue
