@@ -193,12 +193,20 @@ def find_mention_files(root: Path, film: str | None = None) -> list[Path]:
     paths = sorted(root.glob("*/*/processed/**/*_keyword_mentions.json")) + sorted(
         root.glob("*/processed/**/*_keyword_mentions.json")
     )
-    # dedupe
+    # dedupe + skip accidental nested data/data/... mirrors on Windows hosts
+    root_resolved = root.resolve()
     seen: set[Path] = set()
     out: list[Path] = []
     for p in paths:
         rp = p.resolve()
         if rp in seen:
+            continue
+        try:
+            rel = rp.relative_to(root_resolved)
+        except ValueError:
+            rel = None
+        if rel is not None and rel.parts and rel.parts[0].lower() == "data":
+            # e.g. <repo>/data/data/youtube/... — junk mirror, not real crawl output
             continue
         seen.add(rp)
         out.append(p)
