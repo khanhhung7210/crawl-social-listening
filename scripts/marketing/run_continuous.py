@@ -37,6 +37,10 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from social_listening.subprocess_utils import run_streaming  # noqa: E402
+
 PIPELINE = PROJECT_ROOT / "scripts" / "marketing" / "run_full_pipeline.py"
 LOCK_DIR = PROJECT_ROOT / "logs" / "continuous-locks"
 NEWS_CRAWL = PROJECT_ROOT / "scripts" / "marketing" / "crawl" / "news" / "crawl_news_mentions.py"
@@ -71,6 +75,7 @@ def env_python() -> dict[str, str]:
         # Windows console defaults to cp1252; Vietnamese/emoji prints crash otherwise
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
     }
 
 
@@ -100,9 +105,10 @@ def acquire_lock(platform: str) -> Path:
 def run_py(script: Path, *extra: str) -> int:
     cmd = [sys.executable, str(script), *extra]
     log(f"RUN {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env_python())
-    log(f"EXIT {script.name} code={result.returncode}")
-    return result.returncode
+    # Live logs (do not capture) — news crawl can run a long time
+    code = run_streaming(cmd, cwd=PROJECT_ROOT, env=env_python(), timeout=None)
+    log(f"EXIT {script.name} code={code}")
+    return code
 
 
 def run_mxh_round(platform: str, args: argparse.Namespace) -> int:
@@ -118,17 +124,17 @@ def run_mxh_round(platform: str, args: argparse.Namespace) -> int:
         cmd.append("--skip-sync")
 
     # Hard ceiling so one stuck platform cannot block continuous indefinitely.
-    # Default 4h; override with CONTINUOUS_PLATFORM_TIMEOUT_SECONDS.
-    timeout_s = int(os.getenv("CONTINUOUS_PLATFORM_TIMEOUT_SECONDS", "14400") or "14400")
+    # Default 2h (was 4h); crawl stages inside pipeline default 30m and stream logs.
+    timeout_s = int(os.getenv("CONTINUOUS_PLATFORM_TIMEOUT_SECONDS", "7200") or "7200")
     timeout_s = max(300, timeout_s)
 
     log(f"MXH start platform={platform} timeout={timeout_s}s")
     try:
-        result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env_python(), timeout=timeout_s)
-        log(f"MXH end platform={platform} exit={result.returncode}")
-        return result.returncode
+        code = run_streaming(cmd, cwd=PROJECT_ROOT, env=env_python(), timeout=timeout_s)
+        log(f"MXH end platform={platform} exit={code}")
+        return code
     except subprocess.TimeoutExpired:
-        log(f"MXH TIMEOUT platform={platform} after {timeout_s}s — continuing next round")
+        log(f"MXH TIMEOUT platform={platform} after {timeout_s}s — process tree killed, next round")
         return 124
 
 
@@ -286,6 +292,12 @@ def main() -> int:
     log(f"MXH crawl each round: {run_mxh}")
     log(f"News + App Reviews each round: {include_extras}")
     log(f"Classify CX + app topics + metrics each round: {do_enrich}")
+    log(
+        "Reliability: live stage logs, process-tree kill on timeout, "
+        f"platform_timeout={os.getenv('CONTINUOUS_PLATFORM_TIMEOUT_SECONDS', '7200')}s, "
+        f"crawl_stage≈{os.getenv('PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS', '1800')}s, "
+        f"chrome_attach≈{os.getenv('CHROME_ATTACH_TIMEOUT_SECONDS', '90')}s"
+    )
     log("Ctrl+C để dừng")
     log("=" * 60)
 

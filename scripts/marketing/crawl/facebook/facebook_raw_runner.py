@@ -45,7 +45,11 @@ PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.film_paths import film_slug
-from social_listening.keyword_config import collect_search_terms, load_keyword_payload
+from social_listening.keyword_config import (
+    collect_search_terms,
+    group_search_terms_by_brand,
+    load_keyword_payload,
+)
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
 from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
@@ -105,6 +109,19 @@ DEBUG_COMMENT_LOADING = str(os.getenv("FACEBOOK_DEBUG_COMMENTS", "")).strip().lo
 FORCE_RECrawl = str(os.getenv("FACEBOOK_FORCE_RECrawl", "")).strip().lower() in {"1", "true", "yes", "on"}
 CRAWL_TIME_REJECT_WINDOW_SECONDS = int(os.getenv("FACEBOOK_CRAWL_TIME_REJECT_WINDOW_SECONDS", "900"))
 GALAXY_ONLY = str(os.getenv("FACEBOOK_GALAXY_ONLY", "")).strip().lower() in {"1", "true", "yes", "on"}
+# After each brand bucket (GLX → CGV → …), run filter/format (+ optional DB import).
+FLUSH_BRAND_DEFAULT = str(os.getenv("FACEBOOK_FLUSH_BRAND", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+FLUSH_IMPORT_DEFAULT = str(os.getenv("FACEBOOK_FLUSH_IMPORT", "")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 GALAXY_LISTENING_HINTS = (
     "cine chao",
     "cine chào",
@@ -131,8 +148,90 @@ def is_galaxy_search_term(term: str) -> bool:
     return any(hint in normalized for hint in GALAXY_LISTENING_HINTS)
 
 
-def main(force: bool = False) -> int:
+def _python_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "PYTHONPATH": str(PROJECT_ROOT / "src"),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
+def flush_brand_pipeline(brand: str, *, do_import: bool) -> bool:
+    """Filter (+ format + optional import) so brand posts hit DB before later competitors finish."""
+    steps: list[tuple[str, list[str]]] = [
+        (
+            "filter",
+            [sys.executable, str(PROJECT_ROOT / "scripts/marketing/crawl/facebook/facebook_keyword_filter_job.py")],
+        ),
+        (
+            "format",
+            [sys.executable, str(PROJECT_ROOT / "scripts/marketing/crawl/facebook/facebook_format_job.py")],
+        ),
+    ]
+    if do_import:
+        steps.append(
+            (
+                "import",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts/shared/import_keyword_mentions.py"),
+                    "--film",
+                    "galaxy_cinema",
+                ],
+            )
+        )
+
+    print(
+        f"[facebook-search] brand flush start brand={brand} "
+        f"steps={[name for name, _ in steps]}",
+        flush=True,
+    )
+    ok = True
+    for name, cmd in steps:
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                env=_python_env(),
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[facebook-search] brand flush TIMEOUT brand={brand} step={name}", flush=True)
+            ok = False
+            continue
+        except Exception as exc:
+            print(f"[facebook-search] brand flush ERROR brand={brand} step={name} err={exc}", flush=True)
+            ok = False
+            continue
+
+        elapsed = time.monotonic() - started
+        if result.returncode != 0:
+            ok = False
+            tail = "\n".join((result.stderr or result.stdout or "").splitlines()[-8:])
+            print(
+                f"[facebook-search] brand flush FAIL brand={brand} step={name} "
+                f"code={result.returncode} elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+            if tail.strip():
+                print(tail, flush=True)
+        else:
+            print(
+                f"[facebook-search] brand flush OK brand={brand} step={name} elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+    print(f"[facebook-search] brand flush done brand={brand} ok={ok}", flush=True)
+    return ok
+
+
+def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: bool | None = None) -> int:
     force_recrawl = force or FORCE_RECrawl
+    do_flush_brand = FLUSH_BRAND_DEFAULT if flush_brand is None else flush_brand
+    do_flush_import = FLUSH_IMPORT_DEFAULT if flush_import is None else flush_import
     search_terms = collect_search_terms(load_keyword_payload())
     if GALAXY_ONLY:
         search_terms = [term for term in search_terms if is_galaxy_search_term(term)]
@@ -144,6 +243,9 @@ def main(force: bool = False) -> int:
     if not search_terms:
         raise RuntimeError("No search terms found in shared keyword config")
 
+    brand_groups = group_search_terms_by_brand(search_terms)
+    ordered_terms = [term for _brand, terms in brand_groups for term in terms]
+
     with IncrementalCrawlState() as state:
         # Load existing URLs from state (global deduplication across runs)
         existing_urls = set() if force_recrawl else state.get_existing_urls("facebook")
@@ -151,7 +253,15 @@ def main(force: bool = False) -> int:
         run_type = "force" if force_recrawl else ("initial" if is_initial else "incremental")
 
         print(f"[facebook-search] Run type: {run_type}")
-        print(f"[facebook-search] Keywords: {len(search_terms)}")
+        print(f"[facebook-search] Keywords: {len(ordered_terms)}")
+        print(
+            "[facebook-search] Brand groups: "
+            + ", ".join(f"{brand}={len(terms)}" for brand, terms in brand_groups)
+        )
+        print(
+            f"[facebook-search] Flush after brand: {do_flush_brand} "
+            f"(import={do_flush_import})"
+        )
         print(f"[facebook-search] Existing URLs in state: {len(existing_urls)}")
         print(
             f"[facebook-search] Policy lookback={POLICY.lookback_days:.1f}d "
@@ -178,115 +288,126 @@ def main(force: bool = False) -> int:
             total_urls_crawled = 0
             total_urls_skipped = 0
             total_stale = 0
+            keyword_index = 0
 
-            for index, keyword in enumerate(search_terms, start=1):
-                safe_keyword = sanitize_filename(keyword) or f"keyword_{index}"
-                file_path = output_dir / f"search_{safe_keyword}.jsonl"
-                keyword_started = time.monotonic()
-                stats = KeywordCrawlStats(keyword=keyword)
+            for brand, brand_terms in brand_groups:
+                print(
+                    f"[facebook-search] === brand={brand} keywords={len(brand_terms)} ===",
+                    flush=True,
+                )
+                for keyword in brand_terms:
+                    keyword_index += 1
+                    safe_keyword = sanitize_filename(keyword) or f"keyword_{keyword_index}"
+                    file_path = output_dir / f"search_{safe_keyword}.jsonl"
+                    keyword_started = time.monotonic()
+                    stats = KeywordCrawlStats(keyword=keyword)
 
-                # Always re-search; append to today's file instead of skipping the keyword.
-                # Previously skipping non-empty same-day files blocked afternoon coverage.
-                already_in_file = load_existing_post_urls_from_jsonl(file_path)
+                    # Always re-search; append to today's file instead of skipping the keyword.
+                    # Previously skipping non-empty same-day files blocked afternoon coverage.
+                    already_in_file = load_existing_post_urls_from_jsonl(file_path)
 
-                print(f"[facebook-search] {index}/{len(search_terms)} keyword={keyword}")
-                try:
-                    search_result = search_posts_for_keyword(driver, keyword)
-                except Exception as exc:
-                    print(f"[facebook-search] skip keyword={keyword} error={exc}")
-                    stats.detail_failed += 1
+                    print(f"[facebook-search] {keyword_index}/{len(ordered_terms)} brand={brand} keyword={keyword}")
+                    try:
+                        search_result = search_posts_for_keyword(driver, keyword)
+                    except Exception as exc:
+                        print(f"[facebook-search] skip keyword={keyword} error={exc}")
+                        stats.detail_failed += 1
+                        stats.runtime_seconds = time.monotonic() - keyword_started
+                        stats.stop_reason = "search_error"
+                        stats.log("facebook-search")
+                        processed_keywords += 1
+                        continue
+
+                    # Dedupe URLs: session + global state + already written today
+                    keyword_urls = []
+                    for url in search_result["urls"]:
+                        stats.discovered += 1
+                        if (
+                            url in session_crawled_urls
+                            or url in existing_urls
+                            or url in already_in_file
+                        ):
+                            stats.already_seen += 1
+                            total_urls_skipped += 1
+                            continue
+                        session_crawled_urls.add(url)
+                        keyword_urls.append(url)
+
+                    total_urls_discovered += len(search_result["urls"])
+                    stats.new = len(keyword_urls)
+
+                    # Detail up to FINAL after Recent filter; keep stale rows with freshness meta.
+                    posts: list[dict] = []
+                    stale_details = 0
+                    detail_budget = min(len(keyword_urls), MAX_POSTS_PER_KEYWORD)
+                    for url_index, url in enumerate(keyword_urls[:detail_budget], start=1):
+                        if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
+                            stats.stop_reason = "keyword_runtime_limit"
+                            break
+                        if should_stop_keyword_details(stale_details, POLICY):
+                            stats.stop_reason = "max_stale_details"
+                            break
+
+                        if url_index % 10 == 0:
+                            print(
+                                f"[facebook-search] keyword={keyword} crawling detail "
+                                f"{url_index}/{detail_budget}"
+                            )
+
+                        driver, post = crawl_post_with_retries(driver, url)
+                        if not post:
+                            stats.detail_failed += 1
+                            continue
+
+                        content_timestamp = post.get("created_time")
+                        attach_freshness_fields(
+                            post,
+                            content_timestamp,
+                            POLICY,
+                            newest_rank=url_index,
+                            in_final_limit=True,
+                        )
+                        freshness = post.get("freshness") or "unknown"
+
+                        state.mark_crawled(url, "facebook", keyword, content_timestamp)
+                        existing_urls.add(url)
+
+                        post_key = canonical_post_key(post)
+                        if post_key and post_key in session_crawled_post_keys:
+                            continue
+                        if post_key:
+                            session_crawled_post_keys.add(post_key)
+
+                        if freshness == "stale":
+                            stats.stale += 1
+                            stale_details += 1
+                            total_stale += 1
+                            posts.append(post)
+                            continue
+
+                        comments = ((post.get("comments") or {}).get("data") or [])
+                        stats.comments_found += int(post.get("comments_found") or 0)
+                        crawled_n = post.get("comments_crawled")
+                        if crawled_n is None:
+                            crawled_n = len(comments) if isinstance(comments, list) else 0
+                        stats.comments_crawled += int(crawled_n)
+                        posts.append(post)
+                        stats.detail_success += 1
+                        total_urls_crawled += 1
+
+                    append_posts_to_jsonl(file_path, posts)
+
+                    if not stats.stop_reason:
+                        stats.stop_reason = search_result.get("reason", "")
                     stats.runtime_seconds = time.monotonic() - keyword_started
-                    stats.stop_reason = "search_error"
+                    stats.extras["file"] = file_path.name
+                    stats.extras["status"] = search_result.get("status", "")
+                    stats.extras["brand"] = brand
                     stats.log("facebook-search")
                     processed_keywords += 1
-                    continue
 
-                # Dedupe URLs: session + global state + already written today
-                keyword_urls = []
-                for url in search_result["urls"]:
-                    stats.discovered += 1
-                    if (
-                        url in session_crawled_urls
-                        or url in existing_urls
-                        or url in already_in_file
-                    ):
-                        stats.already_seen += 1
-                        total_urls_skipped += 1
-                        continue
-                    session_crawled_urls.add(url)
-                    keyword_urls.append(url)
-
-                total_urls_discovered += len(search_result["urls"])
-                stats.new = len(keyword_urls)
-
-                # Detail up to FINAL after Recent filter; keep stale rows with freshness meta.
-                posts: list[dict] = []
-                stale_details = 0
-                detail_budget = min(len(keyword_urls), MAX_POSTS_PER_KEYWORD)
-                for url_index, url in enumerate(keyword_urls[:detail_budget], start=1):
-                    if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
-                        stats.stop_reason = "keyword_runtime_limit"
-                        break
-                    if should_stop_keyword_details(stale_details, POLICY):
-                        stats.stop_reason = "max_stale_details"
-                        break
-
-                    if url_index % 10 == 0:
-                        print(
-                            f"[facebook-search] keyword={keyword} crawling detail "
-                            f"{url_index}/{detail_budget}"
-                        )
-
-                    driver, post = crawl_post_with_retries(driver, url)
-                    if not post:
-                        stats.detail_failed += 1
-                        continue
-
-                    content_timestamp = post.get("created_time")
-                    attach_freshness_fields(
-                        post,
-                        content_timestamp,
-                        POLICY,
-                        newest_rank=url_index,
-                        in_final_limit=True,
-                    )
-                    freshness = post.get("freshness") or "unknown"
-
-                    state.mark_crawled(url, "facebook", keyword, content_timestamp)
-                    existing_urls.add(url)
-
-                    post_key = canonical_post_key(post)
-                    if post_key and post_key in session_crawled_post_keys:
-                        continue
-                    if post_key:
-                        session_crawled_post_keys.add(post_key)
-
-                    if freshness == "stale":
-                        stats.stale += 1
-                        stale_details += 1
-                        total_stale += 1
-                        posts.append(post)
-                        continue
-
-                    comments = ((post.get("comments") or {}).get("data") or [])
-                    stats.comments_found += int(post.get("comments_found") or 0)
-                    crawled_n = post.get("comments_crawled")
-                    if crawled_n is None:
-                        crawled_n = len(comments) if isinstance(comments, list) else 0
-                    stats.comments_crawled += int(crawled_n)
-                    posts.append(post)
-                    stats.detail_success += 1
-                    total_urls_crawled += 1
-
-                append_posts_to_jsonl(file_path, posts)
-
-                if not stats.stop_reason:
-                    stats.stop_reason = search_result.get("reason", "")
-                stats.runtime_seconds = time.monotonic() - keyword_started
-                stats.extras["file"] = file_path.name
-                stats.extras["status"] = search_result.get("status", "")
-                stats.log("facebook-search")
-                processed_keywords += 1
+                if do_flush_brand:
+                    flush_brand_pipeline(brand, do_import=do_flush_import)
 
             # Complete run tracking
             state.complete_run(
@@ -299,7 +420,8 @@ def main(force: bool = False) -> int:
 
             print(f"\n[facebook-search] Summary:")
             print(f"  - Output directory: {output_dir.resolve()}")
-            print(f"  - Keywords processed: {processed_keywords}/{len(search_terms)}")
+            print(f"  - Keywords processed: {processed_keywords}/{len(ordered_terms)}")
+            print(f"  - Brand groups: {len(brand_groups)}")
             print(f"  - URLs discovered: {total_urls_discovered}")
             print(f"  - Fresh posts crawled (coverage): {total_urls_crawled}")
             print(f"  - Stale details skipped: {total_stale}")
@@ -308,7 +430,6 @@ def main(force: bool = False) -> int:
             return 0
         finally:
             driver.quit()
-
 
 def search_posts_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
     load_search_results(driver, keyword)
@@ -1771,5 +1892,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Re-crawl today's keyword files and ignore incremental URL skip list",
     )
+    parser.add_argument(
+        "--flush-brand",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="After each brand group (GLX/CGV/...), run filter+format (default: FACEBOOK_FLUSH_BRAND or on)",
+    )
+    parser.add_argument(
+        "--flush-import",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Also import Postgres after each brand flush (default: FACEBOOK_FLUSH_IMPORT or off)",
+    )
     cli_args = parser.parse_args()
-    raise SystemExit(main(force=cli_args.force))
+    raise SystemExit(
+        main(
+            force=cli_args.force,
+            flush_brand=cli_args.flush_brand,
+            flush_import=cli_args.flush_import,
+        )
+    )

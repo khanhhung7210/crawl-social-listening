@@ -133,21 +133,10 @@ def build_attached_chrome(address: str | None = None) -> webdriver.Chrome:
 
 
 def build_debugger_chrome(address: str) -> webdriver.Chrome:
-    """Attach to Chrome already listening on a remote-debugging port."""
-    addr = address.strip()
-    if not addr:
-        raise ValueError("debugger address is required")
-    options = Options()
-    options.debugger_address = addr
-    try:
-        # Selenium Manager picks a chromedriver matching installed Chrome (e.g. 151).
-        return webdriver.Chrome(options=options)
-    except SessionNotCreatedException as exc:
-        raise RuntimeError(
-            f"Cannot attach Selenium to Chrome at {addr}. "
-            f"Check: curl http://{addr}/json/version — "
-            "Chrome must be open with --remote-debugging-port."
-        ) from exc
+    """Attach to Chrome already listening on a remote-debugging port (timed)."""
+    from social_listening.crawl_reliability import attach_debugger_chrome
+
+    return attach_debugger_chrome(address)
 
 
 # Back-compat alias used by some crawlers

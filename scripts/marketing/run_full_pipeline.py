@@ -39,6 +39,9 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from social_listening.subprocess_utils import run_streaming  # noqa: E402
 
 # Platform configurations (Galaxy cinema / social — no F&B Meili)
 # Step order matches scripts/windows/run_platform_pipeline.ps1
@@ -140,11 +143,12 @@ def stage_timeout_seconds(stage_name: str, script_path: str) -> int:
     Per-stage timeout so one stuck crawler cannot block continuous forever.
 
     Env:
-      PIPELINE_STAGE_TIMEOUT_SECONDS — default for all stages (default 3600)
-      PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS — crawl stages override (default 3600)
+      PIPELINE_STAGE_TIMEOUT_SECONDS — default for all stages (default 1800)
+      PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS — crawl stages override (default 1800)
       PIPELINE_FORMAT_STAGE_TIMEOUT_SECONDS — format/filter/import (default 1800)
     """
-    default_all = int(os.getenv("PIPELINE_STAGE_TIMEOUT_SECONDS", "3600") or "3600")
+    # Crawl default 30m: hung Selenium must not sit silent for hours (was 3600 / continuous 14400).
+    default_all = int(os.getenv("PIPELINE_STAGE_TIMEOUT_SECONDS", "1800") or "1800")
     crawl_default = int(os.getenv("PIPELINE_CRAWL_STAGE_TIMEOUT_SECONDS", str(default_all)) or default_all)
     format_default = int(os.getenv("PIPELINE_FORMAT_STAGE_TIMEOUT_SECONDS", "1800") or "1800")
 
@@ -205,41 +209,38 @@ class PipelineRunner:
             self.stats["success"].append(stage_name)
             return True
 
+        timeout_s = stage_timeout_seconds(stage_name, script_path)
+        child_env = {
+            **os.environ,
+            "PYTHONPATH": str(PROJECT_ROOT / "src"),
+            # Windows console defaults to cp1252; Vietnamese/emoji prints crash otherwise
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            # Unbuffered so [tiktok-search] lines show before a hang
+            "PYTHONUNBUFFERED": "1",
+        }
         try:
-            result = subprocess.run(
+            # Inherit stdout/stderr — capture_output=True hid all crawler logs until exit/timeout.
+            returncode = run_streaming(
                 cmd,
                 cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=stage_timeout_seconds(stage_name, script_path),
-                env={
-                    **os.environ,
-                    "PYTHONPATH": str(PROJECT_ROOT / "src"),
-                    # Windows console defaults to cp1252; Vietnamese/emoji prints crash otherwise
-                    "PYTHONUTF8": "1",
-                    "PYTHONIOENCODING": "utf-8",
-                },
+                env=child_env,
+                timeout=timeout_s,
             )
 
-            if result.returncode == 0:
+            if returncode == 0:
                 self.log(f"{stage_name}: Completed successfully", "SUCCESS")
                 self.stats["success"].append(stage_name)
                 return True
-            else:
-                self.log(f"{stage_name}: Failed with exit code {result.returncode}", "ERROR")
-                if result.stderr:
-                    print(f"    Error output: {result.stderr[:500]}")
-                if result.stdout:
-                    # Surface last lines so hung/stale crawls leave evidence
-                    tail = "\n".join((result.stdout or "").splitlines()[-20:])
-                    if tail.strip():
-                        print(f"    Stdout tail:\n{tail}")
-                self.stats["failed"].append(stage_name)
-                return False
+            self.log(f"{stage_name}: Failed with exit code {returncode}", "ERROR")
+            self.stats["failed"].append(stage_name)
+            return False
 
         except subprocess.TimeoutExpired:
-            timeout_s = stage_timeout_seconds(stage_name, script_path)
-            self.log(f"{stage_name}: Timed out after {timeout_s}s", "ERROR")
+            self.log(
+                f"{stage_name}: Timed out after {timeout_s}s (process tree killed)",
+                "ERROR",
+            )
             self.stats["failed"].append(stage_name)
             return False
         except Exception as exc:
@@ -313,10 +314,22 @@ class PipelineRunner:
                 continue
             label = f"{stage.title()} — {Path(script).name}"
             extra_args = list(step.get("extra_args") or [])
-            if script.endswith("facebook_raw_runner.py") and (
-                str(os.getenv("FACEBOOK_FORCE_RECrawl", "")).strip().lower() in {"1", "true", "yes", "on"}
-            ):
-                extra_args.append("--force")
+            if script.endswith("facebook_raw_runner.py"):
+                if str(os.getenv("FACEBOOK_FORCE_RECrawl", "")).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }:
+                    extra_args.append("--force")
+                # Mid-crawl brand flush: GLX import before CGV/Lotte finish.
+                # Default on for filter/format; import follows --skip-sync.
+                if not self.args.only_crawl:
+                    if "--flush-brand" not in extra_args and "--no-flush-brand" not in extra_args:
+                        extra_args.append("--flush-brand")
+                    if not self.args.skip_sync:
+                        if "--flush-import" not in extra_args and "--no-flush-import" not in extra_args:
+                            extra_args.append("--flush-import")
             if not self.run_command(script, label, extra_args=extra_args or None):
                 if not self.args.continue_on_error:
                     return False

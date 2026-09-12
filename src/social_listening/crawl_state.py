@@ -18,20 +18,35 @@ because previously seen URLs appeared consecutively.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 
+def default_crawl_state_path() -> Path:
+    """MKT and DIS should use separate DBs when run on the same host."""
+    override = (os.getenv("CRAWL_STATE_DB") or "").strip()
+    if override:
+        return Path(override)
+    return Path("data/crawl_state.db")
+
+
 class IncrementalCrawlState:
     """Manages state for incremental social media crawling"""
 
-    def __init__(self, db_path: str | Path = "data/crawl_state.db"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None):
+        self.db_path = Path(db_path) if db_path is not None else default_crawl_state_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        # timeout avoids forever-block when MKT+DIS share crawl_state.db
+        self.conn = sqlite3.connect(str(self.db_path), timeout=60)
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA busy_timeout=60000")
+        except sqlite3.Error:
+            pass
         self._setup_tables()
 
     def _setup_tables(self) -> None:

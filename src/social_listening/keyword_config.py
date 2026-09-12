@@ -198,6 +198,57 @@ def collect_search_terms(payload: dict, include_hashtags: bool = True, include_c
     return terms
 
 
+# Crawl flush order: own brand first so GLX posts import before competitors finish.
+BRAND_CRAWL_GROUP_ORDER = ("glx", "cgv", "lotte", "beta", "bhd", "cinestar", "other")
+
+
+def classify_search_term_brand(term: str) -> str:
+    """Map a search keyword to a cinema brand bucket for phased crawl/import."""
+    normalized = str(term or "").strip().lower().lstrip("#")
+    if not normalized:
+        return "other"
+    compact = normalized.replace(" ", "")
+    glx_hints = (
+        "galaxy",
+        "galaxycinema",
+        "galaxymovie",
+        "cinechao",
+        "cinechào",
+        "đắmmình",
+        "dammình",
+        "ưuđãicine",
+        "uudaicine",
+        "chàosummer",
+        "chaosummer",
+    )
+    if any(hint in compact or hint in normalized for hint in glx_hints):
+        return "glx"
+    if "cgv" in normalized:
+        return "cgv"
+    if "lotte" in normalized:
+        return "lotte"
+    if "beta" in normalized:
+        return "beta"
+    if "bhd" in normalized:
+        return "bhd"
+    if "cinestar" in normalized:
+        return "cinestar"
+    return "other"
+
+
+def group_search_terms_by_brand(terms: list[str]) -> list[tuple[str, list[str]]]:
+    """Preserve first-seen order within each brand; emit non-empty groups in BRAND_CRAWL_GROUP_ORDER."""
+    buckets: dict[str, list[str]] = {key: [] for key in BRAND_CRAWL_GROUP_ORDER}
+    seen: set[str] = set()
+    for term in terms:
+        text = str(term or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        buckets[classify_search_term_brand(text)].append(text)
+    return [(brand, items) for brand, items in ((k, buckets[k]) for k in BRAND_CRAWL_GROUP_ORDER) if items]
+
+
 def collect_exclude_terms(payload: dict) -> list[str]:
     """Spam / junk phrases — drop post/comment if text matches (not used for FB search)."""
     terms: list[str] = []

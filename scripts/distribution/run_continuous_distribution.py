@@ -51,7 +51,13 @@ def env_python(platform: str | None = None) -> dict[str, str]:
         "PYTHONPATH": str(PROJECT_ROOT / "src"),
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
         "SOCIAL_CONFIG_SOURCE": os.getenv("SOCIAL_CONFIG_SOURCE", "db"),
+        # Separate SQLite so DIS does not lock / corrupt MKT incremental state
+        "CRAWL_STATE_DB": os.getenv(
+            "CRAWL_STATE_DB",
+            str(PROJECT_ROOT / "data" / "crawl_state_dis.db"),
+        ),
     }
     # Always set all DIS ports; runners pick their own env key
     env.setdefault("THREADS_DEBUGGER_ADDRESS", "127.0.0.1:9232")

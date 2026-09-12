@@ -11,12 +11,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 
 
 def _ensure_utf8_stdio() -> None:
@@ -47,9 +44,13 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
+from social_listening.chromedriver_utils import chrome_debugger_ready, leave_chrome_open
 from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
-
+from social_listening.crawl_reliability import (
+    CrawlHeartbeat,
+    assert_social_session,
+    attach_debugger_chrome,
+)
 
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
 POLICY = load_freshness_policy("instagram")
@@ -72,6 +73,7 @@ OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 
 
 def main() -> int:
+    print(f"[instagram-search] boot debugger={DEBUGGER_ADDRESS}", flush=True)
     search_terms = collect_search_terms(load_keyword_payload())
     keyword_limit = int(os.getenv("INSTAGRAM_KEYWORD_LIMIT", "0") or "0")
     if keyword_limit > 0:
@@ -100,7 +102,9 @@ def main() -> int:
 
         run_id = state.start_run("instagram", run_type)
 
+        print(f"[instagram-search] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
         driver = build_driver()
+        hb = CrawlHeartbeat("instagram-search").start()
         try:
             new_results: list[dict] = []
             global_seen: set[str] = set()
@@ -108,11 +112,15 @@ def main() -> int:
             urls_new = 0
 
             for index, keyword in enumerate(search_terms, start=1):
-                print(f"[instagram-search] {index}/{len(search_terms)} keyword={keyword}")
+                hb.update("keyword", f"{index}/{len(search_terms)} {keyword!r}")
+                print(
+                    f"[instagram-search] {index}/{len(search_terms)} keyword={keyword}",
+                    flush=True,
+                )
                 try:
                     search_result = search_posts_for_keyword(driver, keyword, existing_urls)
                 except Exception as exc:
-                    print(f"[instagram-search] skip keyword={keyword} error={exc}")
+                    print(f"[instagram-search] skip keyword={keyword} error={exc}", flush=True)
                     continue
 
                 stats: KeywordCrawlStats = search_result["stats"]
@@ -157,13 +165,14 @@ def main() -> int:
                 keywords_processed=len(search_terms),
             )
 
-            print("[instagram-search] Summary:")
-            print(f"  - Discovered (all keywords): {urls_discovered}")
-            print(f"  - New URLs queued for detail: {urls_new}")
-            print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
+            print("[instagram-search] Summary:", flush=True)
+            print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
+            print(f"  - New URLs queued for detail: {urls_new}", flush=True)
+            print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
             return 0
         finally:
-            driver.quit()
+            hb.stop()
+            leave_chrome_open(driver)
 
 
 def search_posts_for_keyword(
@@ -417,24 +426,9 @@ def ensure_instagram_debug_chrome() -> None:
 
 def build_driver() -> webdriver.Chrome:
     ensure_instagram_debug_chrome()
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-    try:
-        return webdriver.Chrome(options=options)
-    except SessionNotCreatedException:
-        driver_path = resolve_chromedriver_path()
-        try:
-            if driver_path:
-                return webdriver.Chrome(service=Service(driver_path), options=options)
-            return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except SessionNotCreatedException as exc:
-            raise RuntimeError(
-                "Cannot connect to Chrome remote debugging at "
-                f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-                "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-                "--remote-debugging-port=9224 --remote-allow-origins=* "
-                f"--user-data-dir={instagram_chrome_profile_dir()}"
-            ) from exc
+    driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
+    assert_social_session(driver, "instagram")
+    return driver
 
 
 def scroll_search_results(driver: webdriver.Chrome) -> None:
