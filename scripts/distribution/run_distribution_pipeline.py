@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -121,10 +122,16 @@ def select_films(catalog: dict, slug: str | None, all_active: bool) -> list[dict
 
 
 def apply_schema_if_needed() -> None:
-    code = run_py(SEED, "--apply-schema")
-    if code != 0:
-        # Fallback: psql
-        log(f"seed --apply-schema failed — try: psql -d galaxy_social_listening -f {SCHEMA}")
+    # Parallel continuous platforms may race; seed_films serializes + retries deadlock.
+    for attempt in range(1, 4):
+        code = run_py(SEED, "--apply-schema")
+        if code == 0:
+            return
+        log(f"seed --apply-schema failed attempt={attempt}/3 code={code}")
+        if attempt < 3:
+            time.sleep(1.5 * attempt)
+    log(f"seed --apply-schema failed — try: psql -d galaxy_social_listening -f {SCHEMA}")
+    log("Continuing crawl without fresh seed (films table may already be OK)")
 
 
 def crawl_film(

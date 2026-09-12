@@ -33,6 +33,7 @@ PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 PIPELINE = PROJECT_ROOT / "scripts" / "distribution" / "run_distribution_pipeline.py"
+SEED = PROJECT_ROOT / "scripts" / "distribution" / "seed_films.py"
 LOCK_DIR = PROJECT_ROOT / "logs" / "continuous-locks"
 CLASSIFY = PROJECT_ROOT / "scripts" / "distribution" / "classify" / "classify_mention_intent.py"
 METRICS = PROJECT_ROOT / "scripts" / "distribution" / "metrics" / "recompute_daily_film_metrics.py"
@@ -120,6 +121,25 @@ def main() -> int:
     log("Ctrl+C để dừng")
     log("=" * 60)
 
+    # Seed 1 lần đầu — round sau --skip-seed để tránh deadlock khi nhiều platform song song.
+    seed_once = do_import and not args.skip_seed
+    if seed_once:
+        log("seed_films once before continuous rounds")
+        import subprocess as _sp
+
+        seed_code = int(
+            _sp.run(
+                [sys.executable, str(SEED), "--apply-schema"],
+                cwd=str(PROJECT_ROOT),
+                env=env_python(args.platform),
+            ).returncode
+            or 0
+        )
+        if seed_code != 0:
+            log(f"seed_films failed code={seed_code} — rounds continue with --skip-seed")
+        else:
+            log("seed_films OK")
+
     round_no = 0
     try:
         while True:
@@ -140,8 +160,8 @@ def main() -> int:
                 cmd.append("--import-db")
             else:
                 cmd.append("--no-import-db")
-            if args.skip_seed:
-                cmd.append("--skip-seed")
+            # Seed đã chạy 1 lần đầu (hoặc user --skip-seed); tránh seed song song mỗi round.
+            cmd.append("--skip-seed")
 
             import subprocess
 

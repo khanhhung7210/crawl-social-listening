@@ -6,8 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
+
+# Serialize concurrent seed_films / continuous platforms (avoids films deadlock).
+SEED_ADVISORY_LOCK_KEY = 87231401
+SEED_DEADLOCK_RETRIES = 6
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -105,11 +110,31 @@ def deactivate_missing_films(cur, keep_slugs: set[str]) -> int:
     return n
 
 
+def _films_keep_active_trigger_exists(cur) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE NOT t.tgisinternal
+          AND t.tgname = 'trg_films_keep_active'
+          AND c.relname = 'films'
+          AND n.nspname = current_schema()
+        LIMIT 1
+        """
+    )
+    return cur.fetchone() is not None
+
+
 def install_keep_active_guard(cur, keep_slugs: set[str]) -> None:
     """Chặn job cũ (catalog cũ, chạy trên máy DB) tắt nhầm phim đang active.
 
     Bất kỳ UPDATE nào set is_active=FALSE cho slug nằm trong films_keep_active
     đều bị vô hiệu hoá ở tầng DB, không phụ thuộc code phía client.
+
+    Tránh DROP/CREATE TRIGGER mỗi lần seed — AccessExclusiveLock trên films dễ
+    deadlock khi nhiều continuous platform seed song song.
     """
     cur.execute(
         """
@@ -141,6 +166,8 @@ def install_keep_active_guard(cur, keep_slugs: set[str]) -> None:
         END; $$ LANGUAGE plpgsql
         """
     )
+    if _films_keep_active_trigger_exists(cur):
+        return
     cur.execute("DROP TRIGGER IF EXISTS trg_films_keep_active ON films")
     cur.execute(
         """
@@ -458,6 +485,82 @@ def seed_milestones(cur) -> int:
     return n
 
 
+def _is_deadlock(exc: BaseException) -> bool:
+    try:
+        from psycopg2 import errors as pg_errors
+    except ImportError:
+        return "deadlock detected" in str(exc).lower()
+    return isinstance(exc, pg_errors.DeadlockDetected) or "deadlock detected" in str(exc).lower()
+
+
+def run_seed(args: argparse.Namespace) -> None:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # Wait for other seed_films / parallel continuous jobs.
+        cur.execute("SELECT pg_advisory_lock(%s)", (SEED_ADVISORY_LOCK_KEY,))
+        try:
+            if not schema_ready(cur):
+                raise SystemExit(
+                    "Table films missing. Run:\n"
+                    f"  psql -d galaxy_social_listening -f {SCHEMA}\n"
+                    "or: PYTHONPATH=src python3 scripts/distribution/seed_films.py --apply-schema"
+                )
+
+            print(f"Catalog: {CATALOG}")
+            films_n = seed_films(cur)
+            catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+            keep = {
+                str(f.get("slug") or "").strip().lower()
+                for f in (catalog.get("films") or [])
+                if f.get("slug")
+            }
+            keep_active = {
+                str(f.get("slug") or "").strip().lower()
+                for f in (catalog.get("films") or [])
+                if f.get("slug") and bool(f.get("active", True))
+            }
+            # Refresh guard trước khi ép trạng thái để catalog vẫn tắt được phim khi cần
+            install_keep_active_guard(cur, keep_active)
+            deactivated = 0
+            if args.prune:
+                deactivated = deactivate_missing_films(cur, keep)
+            # Luôn ép trạng thái từ catalog cuối cùng — tránh job song song/catalog cũ tắt nhầm phim mới
+            for film in catalog.get("films") or []:
+                slug = str(film.get("slug") or "").strip()
+                if not slug:
+                    continue
+                cur.execute(
+                    """
+                    UPDATE films
+                    SET is_active = %s,
+                        status = %s,
+                        updated_at = NOW()
+                    WHERE film_slug = %s
+                    """,
+                    (
+                        bool(film.get("active", True)),
+                        film.get("status") or "upcoming",
+                        slug,
+                    ),
+                )
+            ms_n = seed_milestones(cur)
+            try:
+                mq_n = seed_movie_queries(cur, force=args.force_queries)
+            except Exception as exc:
+                # listening_queries lives in MKT schema — may be absent on bare DIS DB
+                print(f"  movie queries: skip ({exc})")
+                mq_n = 0
+            print(
+                f"Seeded films={films_n} milestones={ms_n} movie_queries={mq_n} "
+                f"deactivated_old={deactivated} keep={len(keep)} guarded_active={len(keep_active)}"
+            )
+        finally:
+            try:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (SEED_ADVISORY_LOCK_KEY,))
+            except Exception:
+                pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply-schema", action="store_true", help="Apply galaxy_dis_schema.sql if films missing")
@@ -487,60 +590,27 @@ def main() -> int:
             print(f"Schema check failed ({exc}); trying apply …")
             apply_schema()
 
-    with get_connection() as conn:
-        cur = conn.cursor()
-        if not schema_ready(cur):
-            raise SystemExit(
-                "Table films missing. Run:\n"
-                f"  psql -d galaxy_social_listening -f {SCHEMA}\n"
-                "or: PYTHONPATH=src python3 scripts/distribution/seed_films.py --apply-schema"
-            )
-
-        print(f"Catalog: {CATALOG}")
-        films_n = seed_films(cur)
-        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
-        keep = {str(f.get("slug") or "").strip().lower() for f in (catalog.get("films") or []) if f.get("slug")}
-        keep_active = {
-            str(f.get("slug") or "").strip().lower()
-            for f in (catalog.get("films") or [])
-            if f.get("slug") and bool(f.get("active", True))
-        }
-        # Refresh guard trước khi ép trạng thái để catalog vẫn tắt được phim khi cần
-        install_keep_active_guard(cur, keep_active)
-        deactivated = 0
-        if args.prune:
-            deactivated = deactivate_missing_films(cur, keep)
-        # Luôn ép trạng thái từ catalog cuối cùng — tránh job song song/catalog cũ tắt nhầm phim mới
-        for film in catalog.get("films") or []:
-            slug = str(film.get("slug") or "").strip()
-            if not slug:
-                continue
-            cur.execute(
-                """
-                UPDATE films
-                SET is_active = %s,
-                    status = %s,
-                    updated_at = NOW()
-                WHERE film_slug = %s
-                """,
-                (
-                    bool(film.get("active", True)),
-                    film.get("status") or "upcoming",
-                    slug,
-                ),
-            )
-        ms_n = seed_milestones(cur)
+    last_exc: BaseException | None = None
+    for attempt in range(1, SEED_DEADLOCK_RETRIES + 1):
         try:
-            mq_n = seed_movie_queries(cur, force=args.force_queries)
+            run_seed(args)
+            return 0
+        except SystemExit:
+            raise
         except Exception as exc:
-            # listening_queries lives in MKT schema — may be absent on bare DIS DB
-            print(f"  movie queries: skip ({exc})")
-            mq_n = 0
-        print(
-            f"Seeded films={films_n} milestones={ms_n} movie_queries={mq_n} "
-            f"deactivated_old={deactivated} keep={len(keep)} guarded_active={len(keep_active)}"
-        )
-    return 0
+            last_exc = exc
+            if not _is_deadlock(exc) or attempt >= SEED_DEADLOCK_RETRIES:
+                raise
+            wait_s = min(8.0, 0.4 * (2 ** (attempt - 1)))
+            print(
+                f"[seed_films] deadlock attempt={attempt}/{SEED_DEADLOCK_RETRIES}; "
+                f"retry in {wait_s:.1f}s",
+                flush=True,
+            )
+            time.sleep(wait_s)
+    if last_exc:
+        raise last_exc
+    return 1
 
 
 if __name__ == "__main__":
