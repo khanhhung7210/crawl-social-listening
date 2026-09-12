@@ -26,31 +26,60 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import ensure_dir
 from social_listening.chromedriver_utils import build_attached_chrome, leave_chrome_open
 from social_listening.maps_locale import is_galaxy_cinema_place_url, maps_url_with_hl
+from social_listening.crawl_freshness import (
+    classify_detail_freshness,
+    load_freshness_policy,
+)
+from social_listening.review_utils import (
+    parse_relative_time_label,
+)
 
 
 DEBUGGER_ADDRESS = os.getenv("GOOGLE_MAPS_DEBUGGER_ADDRESS", "127.0.0.1:9227")
 INPUT_FILE = platform_raw_dir("google_maps") / "google_maps_search_results.json"
 OUTPUT_FILE = platform_raw_dir("google_maps") / "google_maps_all_places.json"
+POLICY = load_freshness_policy("google_maps")
 MAX_PLACE_COUNT = int(os.getenv("GOOGLE_MAPS_MAX_PLACE_COUNT", "30"))
-MAX_SCROLL_ROUNDS = int(os.getenv("GOOGLE_MAPS_REVIEW_SCROLL_ROUNDS", "8"))
+MAX_SCROLL_ROUNDS = int(
+    os.getenv(
+        "GOOGLE_MAPS_REVIEW_SCROLL_ROUNDS",
+        str(max(POLICY.max_comment_scroll_rounds, 12)),
+    )
+)
 SCROLL_PAUSE_SECONDS = float(os.getenv("GOOGLE_MAPS_REVIEW_SCROLL_PAUSE_SECONDS", "1.8"))
+MAX_REVIEWS = int(os.getenv("GOOGLE_MAPS_MAX_REVIEWS", str(POLICY.max_comments or 200)))
+SORT_ATTEMPTS = int(os.getenv("GOOGLE_MAPS_SORT_ATTEMPTS", "3"))
 
 
 def main() -> int:
-    if not INPUT_FILE.exists():
-        raise RuntimeError(f"Missing input file: {INPUT_FILE}")
+    smoke_url = os.getenv("GOOGLE_MAPS_SMOKE_URL", "").strip()
+    if smoke_url:
+        payload = [{"url": smoke_url, "keyword": "smoke", "search_keyword": "smoke"}]
+    else:
+        if not INPUT_FILE.exists():
+            raise RuntimeError(f"Missing input file: {INPUT_FILE}")
 
-    payload = json.loads(INPUT_FILE.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise RuntimeError("google_maps_search_results.json must be a JSON array")
+        payload = json.loads(INPUT_FILE.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise RuntimeError("google_maps_search_results.json must be a JSON array")
 
     payload = [
         entry
         for entry in payload
         if isinstance(entry, dict)
-        and is_galaxy_cinema_place_url(str(entry.get("url") or "").strip())
+        and (
+            smoke_url
+            or is_galaxy_cinema_place_url(str(entry.get("url") or "").strip())
+        )
     ]
-    print(f"[google-maps-review] galaxy places queued={len(payload)} cap={MAX_PLACE_COUNT}")
+    print(
+        f"[google-maps-review] galaxy places queued={len(payload)} cap={MAX_PLACE_COUNT} "
+        f"scroll={MAX_SCROLL_ROUNDS} max_reviews={MAX_REVIEWS} lookback={POLICY.lookback_days:.0f}d"
+    )
+    print(
+        "[google-maps-review] Prefer Reviews sort=Most recent / Mới nhất; "
+        "then sort extracted reviews by relative time (newest first)"
+    )
 
     driver = build_attached_chrome(DEBUGGER_ADDRESS)
     try:
@@ -66,15 +95,22 @@ def main() -> int:
             try:
                 driver.get(maps_url_with_hl(url))
                 time.sleep(6)
+                ensure_place_page(driver)
                 open_reviews_panel(driver)
-                sort_ok = select_review_sort(driver, "Most recent")
+                sort_ok = ensure_most_recent_sort(driver)
                 print(
                     f"[google-maps-review] sort_most_recent="
-                    f"{'on' if sort_ok else 'unavailable(fail-soft)'}"
+                    f"{'on' if sort_ok else 'unavailable(fail-soft)'} "
+                    f"via=ui current={current_sort_label(driver)!r}"
                 )
                 reveal_original_vietnamese_reviews(driver)
                 scroll_reviews_panel(driver)
                 reveal_original_vietnamese_reviews(driver)
+                reviews = extract_reviews(driver)
+                reviews = dedupe_reviews(reviews)
+                reviews = rank_reviews_newest_first(reviews)
+                if MAX_REVIEWS > 0:
+                    reviews = reviews[:MAX_REVIEWS]
                 items.append(
                     {
                         "url": url,
@@ -82,12 +118,18 @@ def main() -> int:
                         "search_keyword": str(entry.get("search_keyword") or entry.get("keyword") or "").strip(),
                         "crawled_at": datetime.now(timezone.utc).isoformat(),
                         "review_sort": "most_recent" if sort_ok else "default",
+                        "review_sort_label": current_sort_label(driver),
                         "raw_html": driver.page_source,
-                        "crawled_reviews": extract_reviews(driver),
+                        "crawled_reviews": reviews,
                         "place_metadata": extract_place_metadata(driver),
                     }
                 )
-                print(f"[google-maps-review] ✓ Successfully crawled {len(items[-1].get('crawled_reviews', []))} reviews")
+                print(
+                    f"[google-maps-review] ✓ crawled {len(reviews)} reviews "
+                    f"(newest_label={reviews[0].get('created_at_label')!r})"
+                    if reviews
+                    else "[google-maps-review] ✓ crawled 0 reviews"
+                )
 
             except (WebDriverException, InvalidSessionIdException) as e:
                 print(f"[google-maps-review] ✗ ERROR crawling {url}: {e}")
@@ -111,14 +153,52 @@ def main() -> int:
         leave_chrome_open(driver)
 
 
+def ensure_place_page(driver: webdriver.Chrome) -> None:
+    """Search URLs often need a click into the first place card."""
+    current = str(driver.current_url or "")
+    if "/maps/place/" in current:
+        return
+    clicked = driver.execute_script(
+        """
+        const candidates = Array.from(document.querySelectorAll(
+          'a[href*="/maps/place/"], a.hfpxzc, div[role="feed"] a'
+        ));
+        for (const el of candidates) {
+          const href = el.href || el.getAttribute('href') || '';
+          if (!href.includes('/maps/place/')) continue;
+          el.click();
+          return href;
+        }
+        return '';
+        """
+    )
+    if clicked:
+        time.sleep(4)
+
+
 def open_reviews_panel(driver: webdriver.Chrome) -> None:
     driver.execute_script(
         """
-        const labels = ['Reviews', 'Bài đánh giá', 'Xếp hạng và bài đánh giá'];
-        const candidates = Array.from(document.querySelectorAll('button, [role="tab"], a'));
+        const labels = [
+          'Reviews', 'Bài đánh giá', 'Xếp hạng và bài đánh giá',
+          'Đánh giá', 'ratings'
+        ];
+        const candidates = Array.from(document.querySelectorAll(
+          'button, [role="tab"], a, [jsaction*="pane"]'
+        ));
         for (const element of candidates) {
           const text = (element.getAttribute('aria-label') || element.textContent || '').trim();
-          if (labels.some((label) => text.includes(label))) {
+          if (!text) continue;
+          // Prefer dedicated Reviews tab over generic rating chips.
+          if (labels.some((label) => text === label || text.startsWith(label) || text.includes(label))) {
+            element.click();
+            return true;
+          }
+        }
+        // Fallback: rating summary that opens reviews.
+        for (const element of candidates) {
+          const text = (element.getAttribute('aria-label') || element.textContent || '').trim();
+          if (/\\d+[.,]?\\d*\\s*(stars?|sao)/i.test(text) || /\\d+\\s*(reviews?|đánh giá)/i.test(text)) {
             element.click();
             return true;
           }
@@ -129,20 +209,90 @@ def open_reviews_panel(driver: webdriver.Chrome) -> None:
     time.sleep(3)
 
 
+def _norm_ui(text: object) -> str:
+    """Normalize Maps VI labels for matching (accents + combining marks)."""
+    import unicodedata
+
+    value = unicodedata.normalize("NFKD", str(text or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = re.sub(r"\s+", " ", value).strip().casefold()
+    return value
+
+
+def current_sort_label(driver: webdriver.Chrome) -> str:
+    try:
+        return str(
+            driver.execute_script(
+                """
+                const nodes = Array.from(document.querySelectorAll(
+                  'button[aria-haspopup="true"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="true"]'
+                ));
+                for (const el of nodes) {
+                  const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
+                  if (!text) continue;
+                  if (/(Phù hợp nhất|Most relevant|Liên quan nhất|Most recent|Mới nhất|Newest|Xếp hạng cao nhất|Xếp hạng thấp nhất)/i.test(text)) {
+                    return text.replace(/\\s+/g, ' ').slice(0, 80);
+                  }
+                }
+                return '';
+                """
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
+def sort_looks_most_recent(label: str) -> bool:
+    text = _norm_ui(label)
+    if not text:
+        return False
+    if re.search(r"phu hop nhat|relevant|lien quan", text) and not re.search(
+        r"moi nhat|most recent|newest|gan day", text
+    ):
+        return False
+    return bool(re.search(r"most recent|moi nhat|newest|gan day nhat", text))
+
+
+def ensure_most_recent_sort(driver: webdriver.Chrome) -> bool:
+    """Click Mới nhất / Most recent and verify we left Phù hợp nhất / Relevant."""
+    for attempt in range(1, max(1, SORT_ATTEMPTS) + 1):
+        label = current_sort_label(driver)
+        if sort_looks_most_recent(label):
+            return True
+        clicked = select_review_sort(driver, "Most recent")
+        time.sleep(1.5)
+        label = current_sort_label(driver)
+        print(
+            f"[google-maps-review] sort attempt={attempt}/{SORT_ATTEMPTS} "
+            f"clicked={bool(clicked)} label={label!r} "
+            f"ok={sort_looks_most_recent(label) or bool(clicked)}",
+            flush=True,
+        )
+        if sort_looks_most_recent(label):
+            return True
+        # Menu option click succeeded — trust it even if aria label is briefly empty.
+        if clicked:
+            return True
+        open_reviews_panel(driver)
+        time.sleep(0.8)
+    return sort_looks_most_recent(current_sort_label(driver))
+
+
 def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> bool:
     """
-    Open Reviews → sort → Most recent / Mới nhất.
+    Open Reviews → sort → Mới nhất / Most recent.
+    VN UI label is often 'Phù hợp nhất' (not 'Liên quan nhất').
     Fail-soft: returns False if controls are missing.
     """
-    # Click the sort dropdown (often shows current mode e.g. "Most relevant")
     opened = driver.execute_script(
         """
         const labels = [
-          'Sort', 'Sắp xếp', 'Most relevant', 'Liên quan nhất',
-          'Most recent', 'Mới nhất', 'Newest'
+          'Phù hợp nhất', 'Sort', 'Sắp xếp', 'Most relevant', 'Liên quan nhất',
+          'Most recent', 'Mới nhất', 'Newest', 'Xếp hạng cao nhất', 'Xếp hạng thấp nhất'
         ];
         const nodes = Array.from(document.querySelectorAll(
-          'button, [role="button"], [aria-haspopup="listbox"], [jsaction*="sort"]'
+          'button, [role="button"], [aria-haspopup="listbox"], [aria-haspopup="true"], [jsaction*="sort"]'
         ));
         for (const el of nodes) {
           const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
@@ -159,32 +309,82 @@ def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> b
         return False
     time.sleep(1.0)
 
-    targets = ["Most recent", "Newest", "Mới nhất", "Gần đây nhất"]
+    # Include NFC + common combining-accent spellings seen in Maps VI DOM.
+    targets = [
+        "Mới nhất",
+        "Mới nhất",
+        "Newest",
+        "Most recent",
+        "Gần đây nhất",
+    ]
     if mode.strip().lower() not in {"most recent", "newest", ""}:
         targets = [mode] + targets
 
     clicked = driver.execute_script(
         """
         const targets = arguments[0];
+        const norm = (s) => (s || '').normalize('NFC').toLowerCase().replace(/\\s+/g, ' ').trim();
+        const targetNorms = targets.map(norm);
         const nodes = Array.from(document.querySelectorAll(
-          '[role="menuitemradio"], [role="option"], [role="menuitem"], button, li, div'
+          '[role="menuitemradio"], [role="option"], [role="menuitem"], button, li, div, span'
         ));
+        const scored = [];
         for (const el of nodes) {
           const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
-          if (!text) continue;
-          if (targets.some((t) => text === t || text.includes(t))) {
-            // Prefer exact newest labels over "Most relevant"
-            if (/relevant|liên quan/i.test(text) && !/recent|mới|newest/i.test(text)) continue;
-            el.click();
-            return true;
+          if (!text || text.length > 60) continue;
+          const n = norm(text);
+          if (/(phu hop nhat|relevant|lien quan|xep hang cao|xep hang thap|highest|lowest)/i.test(n)
+              && !/(moi nhat|recent|newest)/i.test(n)) {
+            continue;
           }
+          const hit = targetNorms.find((t) => n === t || n.includes(t));
+          if (!hit) continue;
+          const exact = targetNorms.some((t) => n === t) ? 0 : 1;
+          scored.push([exact, text.length, el]);
         }
-        return false;
+        scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        if (!scored.length) return false;
+        scored[0][2].click();
+        return true;
         """,
         targets,
     )
     time.sleep(2.0)
     return bool(clicked)
+
+
+def dedupe_reviews(reviews: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for review in reviews:
+        key = (
+            str(review.get("external_id") or "").strip()
+            or f"{review.get('author')}|{(review.get('text') or '')[:120]}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(review)
+    return out
+
+
+def rank_reviews_newest_first(reviews: list[dict]) -> list[dict]:
+    """Sort by parsed relative label; tag freshness. Keep stale (tag only)."""
+    now = datetime.now(timezone.utc)
+    ranked: list[tuple[str, dict]] = []
+    for review in reviews:
+        label = str(review.get("created_at_label") or "")
+        parsed = parse_relative_time_label(label, now)
+        iso = parsed.isoformat() if parsed is not None else ""
+        freshness = classify_detail_freshness(iso or None, POLICY, now=now)
+        out = dict(review)
+        if iso:
+            out["created_at"] = iso
+        out["freshness"] = freshness
+        # Newest first: ISO sorts lexicographically when timezone-aware UTC.
+        ranked.append((iso or "", out))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in ranked]
 
 
 def reveal_original_vietnamese_reviews(driver: webdriver.Chrome) -> None:
