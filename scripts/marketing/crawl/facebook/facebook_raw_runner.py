@@ -1663,9 +1663,14 @@ def extract_post_created_time(driver: webdriver.Chrome) -> tuple[str, str]:
         if iso:
             candidates.append((3, iso, meta_label))
 
+    # Prefer UI / JSON-LD / meta labels that carry an explicit calendar year.
     for _priority, iso, label in sorted(candidates, key=lambda item: item[0]):
         if _label_has_explicit_year(label):
             return iso, label
+
+    if candidates:
+        _priority, iso, label = sorted(candidates, key=lambda item: item[0])[0]
+        return iso, label
 
     return "", ui_label or json_ld_label or meta_label or ""
 

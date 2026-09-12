@@ -41,12 +41,27 @@ from social_listening.vietnam_filter import is_vietnam_relevant  # noqa: E402
 
 
 def raw_post_date_label(item: dict) -> str:
-    return str(item.get("post_created_at") or item.get("created_at") or item.get("posted_at") or "").strip()
+    return str(
+        item.get("post_created_at_label")
+        or item.get("created_time_label")
+        or item.get("post_created_at")
+        or item.get("created_at")
+        or item.get("posted_at")
+        or ""
+    ).strip()
 
 
 def resolve_post_occurred_at(item: dict, platform: str) -> tuple[datetime | None, str]:
     """Resolve post occurred_at + date_source; flag relative-only scrape labels."""
     raw_label = raw_post_date_label(item)
+    # Absolute FB UI labels with an explicit year beat a wrong crawler ISO.
+    if raw_label and re.search(r"\b(19|20)\d{2}\b", raw_label) and not re.match(
+        r"^\d{4}-\d{2}-\d{2}T", raw_label
+    ):
+        fb_dt = parse_facebook_datetime_label(raw_label)
+        if fb_dt is not None:
+            return fb_dt, "parsed"
+
     if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", raw_label):
         dt = parse_dt(raw_label)
         if dt is not None:

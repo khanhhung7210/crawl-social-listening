@@ -234,6 +234,45 @@ _EN_MONTHS = {
     "december": 12,
 }
 
+_EN_MONTH_ALT = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+_EN_WEEKDAY_ALT = (
+    r"mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|"
+    r"sat(?:urday)?|sun(?:day)?"
+)
+
+
+def _facebook_en_clock(hour: int, minute: int, ampm: str) -> tuple[int, int]:
+    ampm = (ampm or "").upper()
+    if ampm == "PM" and hour < 12:
+        hour += 12
+    if ampm == "AM" and hour == 12:
+        hour = 0
+    return hour, minute
+
+
+def _facebook_local_naive(
+    *,
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    vn: ZoneInfo,
+    ref: datetime,
+    year_explicit: bool,
+) -> datetime | None:
+    try:
+        dt = datetime(year, month, day, hour, minute, tzinfo=vn)
+    except ValueError:
+        return None
+    # Only roll back implied year when FB omits it and clock would be in the future.
+    if not year_explicit and dt > ref + timedelta(hours=2):
+        dt = dt.replace(year=year - 1)
+    return dt.replace(tzinfo=None)
+
 
 def parse_facebook_datetime_label(value: object, *, reference: datetime | None = None) -> datetime | None:
     """Parse Facebook UI timestamps like ``19 tháng 7 lúc 10:10`` or ``8 giờ trước``."""
@@ -260,43 +299,76 @@ def parse_facebook_datetime_label(value: object, *, reference: datetime | None =
     )
     if m:
         day, month = int(m.group(1)), int(m.group(2))
-        year = int(m.group(3)) if m.group(3) else ref.year
+        year_explicit = bool(m.group(3))
+        year = int(m.group(3)) if year_explicit else ref.year
         hour = int(m.group(4) or 0)
         minute = int(m.group(5) or 0)
-        try:
-            dt = datetime(year, month, day, hour, minute, tzinfo=vn)
-            if not m.group(3) and dt > ref + timedelta(hours=2):
-                dt = dt.replace(year=year - 1)
-            return dt.replace(tzinfo=None)
-        except ValueError:
-            pass
+        parsed = _facebook_local_naive(
+            year=year,
+            month=month,
+            day=day,
+            hour=hour,
+            minute=minute,
+            vn=vn,
+            ref=ref,
+            year_explicit=year_explicit,
+        )
+        if parsed is not None:
+            return parsed
 
-    # July 19 at 10:10 AM
+    # Day-first EN: "Saturday 12 September 2026 at 10:09" / "12 September 2026 at 10:09"
+    # Must run before month-first — otherwise "September 2026" eats day=20 from the year.
     m = re.search(
-        r"(?i)(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
-        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-        r"\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?",
+        rf"(?i)(?:(?:{_EN_WEEKDAY_ALT})\s+)?(\d{{1,2}})\s+({_EN_MONTH_ALT})"
+        r"(?:\s*,?\s*(\d{4}))?(?:\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?",
+        text,
+    )
+    if m:
+        month = _EN_MONTHS.get(m.group(2).casefold(), 0)
+        if month:
+            day = int(m.group(1))
+            year_explicit = bool(m.group(3))
+            year = int(m.group(3)) if year_explicit else ref.year
+            hour, minute = _facebook_en_clock(int(m.group(4) or 0), int(m.group(5) or 0), m.group(6) or "")
+            parsed = _facebook_local_naive(
+                year=year,
+                month=month,
+                day=day,
+                hour=hour,
+                minute=minute,
+                vn=vn,
+                ref=ref,
+                year_explicit=year_explicit,
+            )
+            if parsed is not None:
+                return parsed
+
+    # Month-first EN: "July 19 at 10:10 AM" / "September 12, 2026 at 10:09 AM"
+    # (?!\d) stops "September 2026" from matching day=20 out of the year.
+    m = re.search(
+        rf"(?i)({_EN_MONTH_ALT})\s+(\d{{1,2}})(?!\d)(?:,?\s+(\d{{4}}))?"
+        r"(?:\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?",
         text,
     )
     if m:
         month = _EN_MONTHS.get(m.group(1).casefold(), 0)
         if month:
             day = int(m.group(2))
-            year = int(m.group(3)) if m.group(3) else ref.year
-            hour = int(m.group(4) or 0)
-            minute = int(m.group(5) or 0)
-            ampm = (m.group(6) or "").upper()
-            if ampm == "PM" and hour < 12:
-                hour += 12
-            if ampm == "AM" and hour == 12:
-                hour = 0
-            try:
-                dt = datetime(year, month, day, hour, minute, tzinfo=vn)
-                if not m.group(3) and dt > ref + timedelta(hours=2):
-                    dt = dt.replace(year=year - 1)
-                return dt.replace(tzinfo=None)
-            except ValueError:
-                pass
+            year_explicit = bool(m.group(3))
+            year = int(m.group(3)) if year_explicit else ref.year
+            hour, minute = _facebook_en_clock(int(m.group(4) or 0), int(m.group(5) or 0), m.group(6) or "")
+            parsed = _facebook_local_naive(
+                year=year,
+                month=month,
+                day=day,
+                hour=hour,
+                minute=minute,
+                vn=vn,
+                ref=ref,
+                year_explicit=year_explicit,
+            )
+            if parsed is not None:
+                return parsed
 
     return None
 

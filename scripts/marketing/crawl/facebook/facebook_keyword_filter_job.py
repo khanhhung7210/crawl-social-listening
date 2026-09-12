@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.film_paths import film_slug, platform_processed_dir
 from social_listening.film_crawl_filter import keep_distribution_record, passes_film_relevance
 from social_listening.keyword_config import collect_exclude_terms, collect_search_terms, load_keyword_payload
+from social_listening.review_utils import VN_TZ, parse_facebook_datetime_label
 from social_listening.text_utils import contains_keyword, parse_compact_count
 
 
@@ -127,7 +129,8 @@ def build_grouped_post(
         "page_id": page_id,
         "page_name": page_name,
         "post_url": post.get("permalink_url") or "",
-        "post_created_at": (lambda dt: dt.isoformat() if dt else None)(parse_ts(str(post.get("created_time") or ""))),
+        "post_created_at": (lambda dt: dt.isoformat() if dt else None)(resolve_raw_post_created_at(post)),
+        "post_created_at_label": str(post.get("created_time_label") or "").strip() or None,
         "post_text": post_text,
         "post_keyword_match": post_keyword_match,
         "post_keyword_matches": post_matches,
@@ -298,7 +301,37 @@ def parse_ts(value: str) -> datetime | None:
             return None
 
 
+def resolve_raw_post_created_at(post: dict) -> datetime | None:
+    """Prefer UI label when it has an explicit year — crawler ISO can be wrong.
+
+    Facebook day-first labels like ``Saturday 12 September 2026 at 10:09`` used to
+    parse as Sep 2025 and mark fresh complaint posts as stale.
+    """
+    label = str(post.get("created_time_label") or "").strip()
+    iso_raw = str(post.get("created_time") or post.get("published_at") or "").strip()
+    iso_dt = parse_ts(iso_raw) if iso_raw else None
+
+    label_has_year = bool(re.search(r"\b(19|20)\d{2}\b", label))
+    if label:
+        parsed = parse_facebook_datetime_label(label)
+        if parsed is not None:
+            local = parsed.replace(tzinfo=VN_TZ) if parsed.tzinfo is None else parsed.astimezone(VN_TZ)
+            label_dt = local.astimezone(timezone.utc)
+            if label_has_year:
+                return label_dt
+            if iso_dt is None:
+                return label_dt
+            # Relative / yearless label: keep ISO if present.
+    return iso_dt
+
+
 def _comment_created_at_iso(comment: dict) -> str | None:
+    label = str(comment.get("created_time_label") or "").strip()
+    if label and re.search(r"\b(19|20)\d{2}\b", label):
+        parsed = parse_facebook_datetime_label(label)
+        if parsed is not None:
+            local = parsed.replace(tzinfo=VN_TZ) if parsed.tzinfo is None else parsed.astimezone(VN_TZ)
+            return local.astimezone(timezone.utc).isoformat()
     dt = parse_ts(str(comment.get("created_time") or ""))
     return dt.isoformat() if dt is not None else None
 
