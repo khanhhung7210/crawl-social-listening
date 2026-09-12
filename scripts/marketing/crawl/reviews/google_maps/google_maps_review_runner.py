@@ -96,6 +96,14 @@ def main() -> int:
                 driver.get(maps_url_with_hl(url))
                 time.sleep(6)
                 ensure_place_page(driver)
+                # Official 4.3 / 9.363 lives on Overview; Reviews tab drops the F7nice block.
+                place_metadata = extract_place_metadata(driver)
+                print(
+                    f"[google-maps-review] place_rating={place_metadata.get('rating_text')!r} "
+                    f"place_reviews={place_metadata.get('review_count_text')!r} "
+                    f"title={place_metadata.get('title')!r}",
+                    flush=True,
+                )
                 open_reviews_panel(driver)
                 if not wait_for_sort_dropdown(driver):
                     open_reviews_panel(driver)
@@ -106,14 +114,21 @@ def main() -> int:
                     f"{'on' if sort_ok else 'unavailable(fail-soft)'} "
                     f"via=ui current={current_sort_label(driver)!r}"
                 )
-                reveal_original_vietnamese_reviews(driver)
-                scroll_reviews_panel(driver)
-                reveal_original_vietnamese_reviews(driver)
-                reviews = extract_reviews(driver)
-                reviews = dedupe_reviews(reviews)
-                reviews = rank_reviews_newest_first(reviews)
-                if MAX_REVIEWS > 0:
-                    reviews = reviews[:MAX_REVIEWS]
+                reviews: list[dict] = []
+                try:
+                    reveal_original_vietnamese_reviews(driver)
+                    scroll_reviews_panel(driver)
+                    reveal_original_vietnamese_reviews(driver)
+                    reviews = extract_reviews(driver)
+                    reviews = dedupe_reviews(reviews)
+                    reviews = rank_reviews_newest_first(reviews)
+                    if MAX_REVIEWS > 0:
+                        reviews = reviews[:MAX_REVIEWS]
+                except (WebDriverException, InvalidSessionIdException) as review_exc:
+                    print(
+                        f"[google-maps-review] review extract failed (keeping place metadata): {review_exc}",
+                        flush=True,
+                    )
                 items.append(
                     {
                         "url": url,
@@ -121,10 +136,10 @@ def main() -> int:
                         "search_keyword": str(entry.get("search_keyword") or entry.get("keyword") or "").strip(),
                         "crawled_at": datetime.now(timezone.utc).isoformat(),
                         "review_sort": "most_recent" if sort_ok else "default",
-                        "review_sort_label": current_sort_label(driver),
-                        "raw_html": driver.page_source,
+                        "review_sort_label": current_sort_label(driver) if sort_ok else "",
+                        "raw_html": "",
                         "crawled_reviews": reviews,
-                        "place_metadata": extract_place_metadata(driver),
+                        "place_metadata": place_metadata,
                     }
                 )
                 print(
@@ -490,8 +505,62 @@ def extract_place_metadata(driver: webdriver.Chrome) -> dict:
         if (!title) {
           title = (document.title || '').replace(/\\s*-\\s*Google Maps\\s*$/i, '').trim();
         }
-        const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"], span[aria-label*="star" i], span[aria-label*="sao" i]');
-        const ratingText = (ratingEl?.getAttribute('aria-label') || ratingEl?.textContent || '').trim();
+
+        const parseCount = (raw) => {
+          if (!raw) return null;
+          const digits = String(raw).replace(/[^\\d]/g, '');
+          if (!digits) return null;
+          const n = Number(digits);
+          return Number.isFinite(n) && n > 0 ? n : null;
+        };
+        const parseRating = (raw) => {
+          if (!raw) return null;
+          const m = String(raw).replace(',', '.').match(/(\\d+(?:\\.\\d+)?)/);
+          if (!m) return null;
+          const n = Number(m[1]);
+          // Place averages are almost always x.y (e.g. 4.3), never a lone 1–5 star from a review card.
+          if (!Number.isFinite(n) || n < 1 || n > 5) return null;
+          return n;
+        };
+
+        let rating = null;
+        let reviewCount = null;
+
+        // 1) Primary: rating summary block under the place title.
+        const nice = document.querySelector('div.F7nice');
+        if (nice) {
+          const niceText = (nice.innerText || '').replace(/\\s+/g, ' ').trim();
+          const niceAria = Array.from(nice.querySelectorAll('[aria-label]'))
+            .map((n) => n.getAttribute('aria-label') || '')
+            .join(' | ');
+          const blob = `${niceText} ${niceAria}`;
+          const rm = blob.match(/(\\d+[.,]\\d+)/); // prefer decimal place rating
+          if (rm) rating = parseRating(rm[1]);
+          const cm = blob.match(/([\\d.]+)\\s*(?:bài(?:\\s*đánh\\s*giá|\\s*viết)?|reviews?)/i)
+            || blob.match(/\\(([\\d.]+)\\)/);
+          if (cm) reviewCount = parseCount(cm[1]);
+          if (!rating) {
+            const vis = nice.querySelector('span[aria-hidden="true"], span[role="img"]');
+            rating = parseRating(vis?.textContent || '');
+          }
+        }
+
+        // 2) Fallback: aria on place header buttons near title (not review cards).
+        if (rating == null || reviewCount == null) {
+          const header = titleEl?.closest('div')?.parentElement || document.querySelector('[role="main"]');
+          const nodes = Array.from((header || document).querySelectorAll('[aria-label]')).slice(0, 40);
+          for (const node of nodes) {
+            const label = (node.getAttribute('aria-label') || '').trim();
+            if (!label || label.length > 100) continue;
+            // Must look like place summary: rating + reviews together.
+            const m = label.match(/(\\d+[.,]\\d+)\\s*(?:sao|stars?).{0,40}?([\\d.]+)\\s*(?:bài|reviews?)/i);
+            if (!m) continue;
+            if (rating == null) rating = parseRating(m[1]);
+            if (reviewCount == null) reviewCount = parseCount(m[2]);
+            if (rating != null && reviewCount != null) break;
+          }
+        }
+
         const addressSelectors = [
           'button[data-item-id="address"]',
           'button[data-item-id^="address"]',
@@ -508,7 +577,12 @@ def extract_place_metadata(driver: webdriver.Chrome) -> dict:
           if (address && !/drag to change|click to remove|search|close/i.test(address)) break;
           address = '';
         }
-        return {title, rating_text: ratingText, address};
+        return {
+          title,
+          rating_text: rating == null ? '' : String(rating).replace('.', ','),
+          review_count_text: reviewCount == null ? '' : String(reviewCount),
+          address,
+        };
         """
     )
 

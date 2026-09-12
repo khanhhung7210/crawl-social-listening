@@ -58,6 +58,20 @@ def main() -> int:
     return 0
 
 
+def parse_compact_int(value: object) -> int | None:
+    text = compact_whitespace(value)
+    if not text:
+        return None
+    # VN: 9.363 ; EN: 9,363
+    digits = re.sub(r"[^\d]", "", text.replace(" ", ""))
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except Exception:
+        return None
+
+
 def parse_place_record(item: dict) -> dict:
     metadata = item.get("place_metadata") or {}
     current_url = str(item.get("current_url") or item.get("url") or "").strip()
@@ -71,7 +85,8 @@ def parse_place_record(item: dict) -> dict:
     address = compact_whitespace(metadata.get("address"))
     if is_google_maps_ui_junk(address):
         address = ""
-    rating = normalize_rating(metadata.get("rating_text"))
+    place_rating = normalize_rating(metadata.get("rating_text"))
+    place_review_count = parse_compact_int(metadata.get("review_count_text"))
     crawled_at = normalize_created_at(item.get("crawled_at")) or datetime.now(timezone.utc).isoformat()
     reviews = build_reviews(item.get("crawled_reviews") or [], place_id, current_url, crawled_at)
 
@@ -91,8 +106,13 @@ def parse_place_record(item: dict) -> dict:
         "source_file": str(INPUT_FILE.relative_to(PROJECT_ROOT)),
         "skip_post_mention": True,
         "stats": {
-            "rating": rating,
-            "review_count": len(reviews),
+            # Official Google place rating / total reviews (not sample size).
+            "rating": place_rating,
+            "place_rating": place_rating,
+            "place_review_count": place_review_count,
+            "review_count": place_review_count if place_review_count is not None else len(reviews),
+            "sample_review_count": len(reviews),
+            "comment_count": place_review_count if place_review_count is not None else len(reviews),
             "address": address,
             "search_keyword": str(item.get("search_keyword") or "").strip(),
         },

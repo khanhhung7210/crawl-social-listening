@@ -213,6 +213,11 @@ def upsert_post(cur, item: dict, platform: str) -> str:
     url = item.get("post_url") or item.get("url") or ""
     author = item.get("page_name") or item.get("author") or item.get("author_name")
     engagement = post_engagement_from_item(item)
+    stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+    post_meta: dict = {"source": item.get("source")}
+    for key in ("place_rating", "place_review_count", "rating", "address", "search_keyword", "sample_review_count"):
+        if stats.get(key) is not None and stats.get(key) != "":
+            post_meta[key] = stats.get(key)
     # posts.posted_at may be NOT NULL — utcnow is only a posts-row placeholder.
     # Mentions require a real publish time via resolve_post_occurred_at (no invent).
     posted_at_value = posted_at or datetime.utcnow()
@@ -227,12 +232,14 @@ def upsert_post(cur, item: dict, platform: str) -> str:
         )
         ON CONFLICT (platform_code, external_post_id) DO UPDATE SET
             post_text = EXCLUDED.post_text,
+            author_name = COALESCE(EXCLUDED.author_name, posts.author_name),
             posted_at = COALESCE(%s, posts.posted_at),
             post_url = COALESCE(EXCLUDED.post_url, posts.post_url),
             like_count = COALESCE(EXCLUDED.like_count, posts.like_count),
             comment_count = COALESCE(EXCLUDED.comment_count, posts.comment_count),
             view_count = COALESCE(EXCLUDED.view_count, posts.view_count),
             share_count = COALESCE(EXCLUDED.share_count, posts.share_count),
+            metadata = COALESCE(posts.metadata, '{}'::jsonb) || EXCLUDED.metadata,
             updated_at = NOW()
         RETURNING post_id::text
         """,
@@ -248,7 +255,7 @@ def upsert_post(cur, item: dict, platform: str) -> str:
             engagement["comment_count"],
             engagement["view_count"],
             engagement["share_count"],
-            json.dumps({"source": item.get("source")}, ensure_ascii=False),
+            json.dumps(post_meta, ensure_ascii=False, default=str),
             posted_at,  # do not overwrite good dates with utcnow fallback
         ),
     )
