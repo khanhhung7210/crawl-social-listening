@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Crawl Google News RSS for cinema brands → *_keyword_mentions.json (no Chrome).
 
+Google News RSS has no reliable date-sort (scoring=n is a no-op on /rss/search).
+A wide when:30d window ranks by relevance and buries fresh stories, so we crawl
+multiple recency windows (1d + 7d + lookback) and merge/dedupe, then sort by pubDate.
+
 Usage:
   PYTHONPATH=src python3 scripts/marketing/crawl/news/crawl_news_mentions.py
-  PYTHONPATH=src python3 scripts/marketing/crawl/news/crawl_news_mentions.py --days 30
+  PYTHONPATH=src python3 scripts/marketing/crawl/news/crawl_news_mentions.py --days 14
 """
 
 from __future__ import annotations
@@ -11,14 +15,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+
 
 def _project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -44,8 +50,12 @@ QUERIES_EXTRA = [
     "Cinestar",
     "Cine Chào Summer",
     "Cine Chao Summer",
-    "\"Cine Chào Summer\" Galaxy",
+    '"Cine Chào Summer" Galaxy',
 ]
+
+# Narrow → wide. Narrow windows surface hours/days-old stories that a wide
+# relevance SERP buries under promo/evergreen hits.
+DEFAULT_WINDOW_DAYS = (1, 7)
 
 
 def stable_id(*parts: str) -> str:
@@ -62,18 +72,44 @@ def parse_pub(value: str | None) -> str:
         return ""
 
 
-def fetch_rss(query: str, days: int) -> list[dict]:
-    q = f"{query} when:{days}d"
+def parse_iso(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def resolve_windows(days: int) -> list[tuple[str, int]]:
+    """Return ordered (mode, when_days) windows, always ending with lookback."""
+    lookback = max(1, int(days))
+    windows: list[tuple[str, int]] = []
+    seen: set[int] = set()
+    for d in DEFAULT_WINDOW_DAYS:
+        if d < lookback and d not in seen:
+            windows.append((f"when_{d}d", d))
+            seen.add(d)
+    if lookback not in seen:
+        windows.append((f"when_{lookback}d", lookback))
+    return windows
+
+
+def fetch_rss(query: str, when_days: int, mode: str) -> list[dict]:
+    q = f"{query} when:{when_days}d"
     url = (
         "https://news.google.com/rss/search?"
-        + urllib.parse.urlencode(
-            {"q": q, "hl": "vi", "gl": "VN", "ceid": "VN:vi"}
-        )
+        + urllib.parse.urlencode({"q": q, "hl": "vi", "gl": "VN", "ceid": "VN:vi"})
     )
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 (compatible; GalaxySocialListening/1.0)",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
             "Accept": "application/rss+xml, application/xml, text/xml, */*",
         },
     )
@@ -106,6 +142,7 @@ def fetch_rss(query: str, days: int) -> list[dict]:
                 "post_keyword_match": True,
                 "parent_keyword_match": True,
                 "post_keyword_matches": [query],
+                "search_modes": [mode],
                 "source": "crawl_news_mentions",
                 "stats": {},
                 "comments": [],
@@ -114,10 +151,48 @@ def fetch_rss(query: str, days: int) -> list[dict]:
     return items
 
 
+def merge_row(existing: dict, incoming: dict) -> dict:
+    modes = []
+    for src in (existing, incoming):
+        raw = src.get("search_modes") or []
+        if isinstance(raw, list):
+            modes.extend(str(x) for x in raw if x)
+    matches = []
+    for src in (existing, incoming):
+        raw = src.get("post_keyword_matches") or []
+        if isinstance(raw, list):
+            matches.extend(str(x) for x in raw if x)
+    out = dict(existing)
+    out.update({k: v for k, v in incoming.items() if v not in (None, "", [], {})})
+    # Prefer richer / newer timestamp if one side empty
+    if not out.get("post_created_at"):
+        out["post_created_at"] = incoming.get("post_created_at") or existing.get("post_created_at") or ""
+    out["search_modes"] = sorted(set(modes))
+    out["post_keyword_matches"] = list(dict.fromkeys(matches))
+    return out
+
+
+def within_lookback(row: dict, cutoff: datetime) -> bool:
+    dt = parse_iso(row.get("post_created_at"))
+    if dt is None:
+        # Keep unknown-date rows from this crawl; drop ancient unknowns from file merge
+        return bool(row.get("_from_crawl"))
+    return dt >= cutoff
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, default=30, help="Google News when:Nd window")
+    default_days = int(os.getenv("CRAWL_LOOKBACK_DAYS", "14") or "14")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=default_days,
+        help="Google News lookback window (default CRAWL_LOOKBACK_DAYS or 14)",
+    )
     args = parser.parse_args()
+    lookback_days = max(1, args.days)
+    windows = resolve_windows(lookback_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 
     terms = list(dict.fromkeys(collect_search_terms(load_keyword_payload()) + QUERIES_EXTRA))
     # Prefer brand-ish terms; skip bare hashtags for news search quality
@@ -135,34 +210,81 @@ def main() -> int:
         except (json.JSONDecodeError, OSError) as exc:
             print(f"[news] warn: cannot read existing {out_path}: {exc}", file=sys.stderr)
 
-    seen: set[str] = set()
-    merged: list[dict] = []
+    by_id: dict[str, dict] = {}
+    mode_counts: dict[str, int] = {mode: 0 for mode, _ in windows}
     fetch_ok = 0
     fetch_fail = 0
     skipped_market = 0
+
+    print(
+        f"[news] lookback={lookback_days}d windows={[m for m, _ in windows]} "
+        f"terms={len(terms)}",
+        flush=True,
+    )
+
     for term in terms:
-        try:
-            batch = fetch_rss(term, max(1, args.days))
-            fetch_ok += 1
-        except Exception as exc:
-            fetch_fail += 1
-            print(f"[news] skip {term!r}: {exc}", file=sys.stderr)
+        term_new = 0
+        for mode, when_days in windows:
+            try:
+                batch = fetch_rss(term, when_days, mode)
+                fetch_ok += 1
+            except Exception as exc:
+                fetch_fail += 1
+                print(f"[news] skip {term!r} mode={mode}: {exc}", file=sys.stderr)
+                continue
+            for row in batch:
+                row["_from_crawl"] = True
+                if not is_vietnam_relevant(
+                    row.get("post_text"),
+                    permalink=row.get("post_url"),
+                    author=row.get("page_name"),
+                    platform="news",
+                ):
+                    skipped_market += 1
+                    continue
+                if not within_lookback(row, cutoff):
+                    continue
+                key = str(row["post_id"])
+                prev = by_id.get(key)
+                if prev is None:
+                    by_id[key] = row
+                    mode_counts[mode] = mode_counts.get(mode, 0) + 1
+                    term_new += 1
+                else:
+                    by_id[key] = merge_row(prev, row)
+                    # Count first-seen mode only for extras; still tag modes on row
+        print(
+            f"[news] {term!r}: +{term_new} unique "
+            f"(windows={ {m: mode_counts.get(m, 0) for m, _ in windows} })",
+            flush=True,
+        )
+
+    # Keep prior file rows still inside lookback (RSS cap ~100; avoid wipe).
+    kept_existing = 0
+    for row in existing:
+        if not isinstance(row, dict):
             continue
-        print(f"[news] {term!r}: {len(batch)} items")
-        for row in batch:
-            key = row["post_id"]
-            if key in seen:
-                continue
-            if not is_vietnam_relevant(
-                row.get("post_text"),
-                permalink=row.get("post_url"),
-                author=row.get("page_name"),
-                platform="news",
-            ):
-                skipped_market += 1
-                continue
-            seen.add(key)
-            merged.append(row)
+        key = str(row.get("post_id") or "").strip()
+        if not key:
+            continue
+        if key in by_id:
+            by_id[key] = merge_row(row, by_id[key])
+            continue
+        if not within_lookback(row, cutoff):
+            continue
+        if not is_vietnam_relevant(
+            row.get("post_text"),
+            permalink=row.get("post_url"),
+            author=row.get("page_name"),
+            platform="news",
+        ):
+            continue
+        by_id[key] = dict(row)
+        kept_existing += 1
+
+    merged = list(by_id.values())
+    for row in merged:
+        row.pop("_from_crawl", None)
 
     if not merged:
         if existing:
@@ -176,8 +298,17 @@ def main() -> int:
         print(f"Wrote 0 mentions → {out_path}")
         return 1
 
+    merged.sort(
+        key=lambda r: str(r.get("post_created_at") or ""),
+        reverse=True,
+    )
     out_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {len(merged)} mentions → {out_path} (skipped_market={skipped_market})")
+    print(
+        f"Wrote {len(merged)} mentions → {out_path} "
+        f"(skipped_market={skipped_market} kept_existing={kept_existing} "
+        f"ok={fetch_ok} fail={fetch_fail} modes={mode_counts})",
+        flush=True,
+    )
     return 0
 
 

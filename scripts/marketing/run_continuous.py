@@ -245,7 +245,12 @@ def main() -> int:
     parser.add_argument("--skip-sync", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--only-crawl", action="store_true", help="Only MXH crawl stages")
     parser.add_argument("--max-rounds", type=int, default=0, help="0 = forever")
-    parser.add_argument("--news-days", type=int, default=30, help="Google News window")
+    parser.add_argument(
+        "--news-days",
+        type=int,
+        default=int(os.getenv("CRAWL_LOOKBACK_DAYS", "14") or "14"),
+        help="Google News lookback days (default CRAWL_LOOKBACK_DAYS or 14)",
+    )
     parser.add_argument(
         "--skip-news-apps",
         action="store_true",
