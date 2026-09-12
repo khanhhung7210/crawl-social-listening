@@ -97,6 +97,9 @@ def main() -> int:
                 time.sleep(6)
                 ensure_place_page(driver)
                 open_reviews_panel(driver)
+                if not wait_for_sort_dropdown(driver):
+                    open_reviews_panel(driver)
+                    wait_for_sort_dropdown(driver)
                 sort_ok = ensure_most_recent_sort(driver)
                 print(
                     f"[google-maps-review] sort_most_recent="
@@ -179,34 +182,61 @@ def ensure_place_page(driver: webdriver.Chrome) -> None:
 def open_reviews_panel(driver: webdriver.Chrome) -> None:
     driver.execute_script(
         """
-        const labels = [
-          'Reviews', 'Bài đánh giá', 'Xếp hạng và bài đánh giá',
-          'Đánh giá', 'ratings'
-        ];
+        const prefer = ['Bài đánh giá', 'Reviews'];
+        const also = ['Xếp hạng và bài đánh giá'];
         const candidates = Array.from(document.querySelectorAll(
-          'button, [role="tab"], a, [jsaction*="pane"]'
+          'button, [role="tab"], a'
         ));
+        const score = (text) => {
+          if (prefer.some((l) => text === l || text.startsWith(l + ' ') || text.startsWith(l + ' về'))) return 0;
+          if (prefer.some((l) => text.includes(l)) && !/khác|other|viết|write/i.test(text)) return 1;
+          if (also.some((l) => text.includes(l))) return 2;
+          return 9;
+        };
+        const ranked = [];
         for (const element of candidates) {
-          const text = (element.getAttribute('aria-label') || element.textContent || '').trim();
-          if (!text) continue;
-          // Prefer dedicated Reviews tab over generic rating chips.
-          if (labels.some((label) => text === label || text.startsWith(label) || text.includes(label))) {
-            element.click();
-            return true;
-          }
+          const text = (element.getAttribute('aria-label') || element.textContent || '').trim().replace(/\\s+/g, ' ');
+          if (!text || text.length > 80) continue;
+          const s = score(text);
+          if (s < 9) ranked.push([s, text.length, element, text]);
+        }
+        ranked.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        if (ranked.length) {
+          ranked[0][2].click();
+          return ranked[0][3];
         }
         // Fallback: rating summary that opens reviews.
         for (const element of candidates) {
           const text = (element.getAttribute('aria-label') || element.textContent || '').trim();
-          if (/\\d+[.,]?\\d*\\s*(stars?|sao)/i.test(text) || /\\d+\\s*(reviews?|đánh giá)/i.test(text)) {
+          if (/\\d+[.,]?\\d*\\s*(stars?|sao)/i.test(text) || /\\d+[\\.,]?\\d*\\s*(reviews?|đánh giá)/i.test(text)) {
             element.click();
-            return true;
+            return text.slice(0, 80);
           }
         }
-        return false;
+        return '';
         """
     )
-    time.sleep(3)
+    time.sleep(3.5)
+
+
+def wait_for_sort_dropdown(driver: webdriver.Chrome, timeout_s: float = 8.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        found = driver.execute_script(
+            """
+            const labels = ['Phù hợp nhất', 'Most relevant', 'Liên quan nhất', 'Most recent', 'Mới nhất', 'Newest'];
+            return Array.from(document.querySelectorAll(
+              'button[aria-haspopup="true"], button[aria-haspopup="listbox"]'
+            )).some((el) => {
+              const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
+              return labels.some((l) => text.includes(l));
+            });
+            """
+        )
+        if found:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _norm_ui(text: object) -> str:
@@ -292,21 +322,23 @@ def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> b
           'Most recent', 'Mới nhất', 'Newest', 'Xếp hạng cao nhất', 'Xếp hạng thấp nhất'
         ];
         const nodes = Array.from(document.querySelectorAll(
-          'button, [role="button"], [aria-haspopup="listbox"], [aria-haspopup="true"], [jsaction*="sort"]'
+          'button[aria-haspopup="true"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="true"]'
         ));
         for (const el of nodes) {
           const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
           if (!text) continue;
           if (labels.some((l) => text.includes(l))) {
             el.click();
-            return true;
+            return text.replace(/\\s+/g, ' ').slice(0, 80);
           }
         }
-        return false;
+        return '';
         """
     )
     if not opened:
+        print("[google-maps-review] sort dropdown not found", flush=True)
         return False
+    print(f"[google-maps-review] sort dropdown opened via={opened!r}", flush=True)
     time.sleep(1.0)
 
     # Include NFC + common combining-accent spellings seen in Maps VI DOM.
@@ -323,15 +355,21 @@ def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> b
     clicked = driver.execute_script(
         """
         const targets = arguments[0];
-        const norm = (s) => (s || '').normalize('NFC').toLowerCase().replace(/\\s+/g, ' ').trim();
+        const norm = (s) => (s || '')
+          .normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\\s+/g, ' ')
+          .trim();
         const targetNorms = targets.map(norm);
+        // Restrict to menu radios — broad button/div queries can click junk and wipe the feed.
         const nodes = Array.from(document.querySelectorAll(
-          '[role="menuitemradio"], [role="option"], [role="menuitem"], button, li, div, span'
+          '[role="menuitemradio"], [role="option"], [role="menuitem"]'
         ));
         const scored = [];
         for (const el of nodes) {
           const text = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim();
-          if (!text || text.length > 60) continue;
+          if (!text || text.length > 80) continue;
           const n = norm(text);
           if (/(phu hop nhat|relevant|lien quan|xep hang cao|xep hang thap|highest|lowest)/i.test(n)
               && !/(moi nhat|recent|newest)/i.test(n)) {
@@ -340,16 +378,20 @@ def select_review_sort(driver: webdriver.Chrome, mode: str = "Most recent") -> b
           const hit = targetNorms.find((t) => n === t || n.includes(t));
           if (!hit) continue;
           const exact = targetNorms.some((t) => n === t) ? 0 : 1;
-          scored.push([exact, text.length, el]);
+          scored.push([exact, text.length, el, text]);
         }
         scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-        if (!scored.length) return false;
+        if (!scored.length) return {ok: false, picked: ''};
         scored[0][2].click();
-        return true;
+        return {ok: true, picked: scored[0][3]};
         """,
         targets,
     )
-    time.sleep(2.0)
+    time.sleep(2.5)
+    if isinstance(clicked, dict):
+        if clicked.get("picked"):
+            print(f"[google-maps-review] sort menu picked={clicked.get('picked')!r}", flush=True)
+        return bool(clicked.get("ok"))
     return bool(clicked)
 
 
