@@ -65,6 +65,8 @@ DETAIL_MAX_URLS = int(os.getenv("INSTAGRAM_DETAIL_MAX_URLS", str(max(FINAL_LIMIT
 DETAIL_MAX_RUNTIME_SECONDS = int(
     os.getenv("INSTAGRAM_DETAIL_MAX_RUNTIME_SECONDS", "1500") or "1500"
 )
+# Stop burning the round when IG hides timestamps for many posts in a row.
+NO_CREATED_AT_ABORT = int(os.getenv("INSTAGRAM_DETAIL_NO_CREATED_AT_ABORT", "8") or "8")
 
 
 def main() -> int:
@@ -122,6 +124,8 @@ def main() -> int:
             )
 
             keyword_batches: dict[str, list[dict]] = {}
+            attempted_urls: set[str] = set()
+            consecutive_no_created = 0
             for index, item in enumerate(pending_urls, start=1):
                 if time.monotonic() - run_started >= DETAIL_MAX_RUNTIME_SECONDS:
                     print(
@@ -155,12 +159,22 @@ def main() -> int:
                         "freshness": "unknown",
                     }
 
+                attempted_urls.add(normalize_instagram_post_url(url))
+
                 if record.get("error"):
                     failed_count += 1
                     kw_stats.detail_failed += 1
+                    consecutive_no_created += 1
                     records.append(record)
                     save_records(OUTPUT_FILE, records)
                     print(f"[{index}/{total}] failed {url}")
+                    if consecutive_no_created >= NO_CREATED_AT_ABORT:
+                        print(
+                            f"[instagram-detail] stop early: {consecutive_no_created} consecutive "
+                            f"fail/no-created_at — check login / selectors",
+                            flush=True,
+                        )
+                        break
                     continue
 
                 content_timestamp = (
@@ -172,15 +186,31 @@ def main() -> int:
                 attach_freshness_fields(record, content_timestamp, POLICY)
                 freshness = record.get("freshness") or "unknown"
 
-                # Never mark unknown/empty time as done — IG often hides createTime; retry later.
                 if content_timestamp:
+                    consecutive_no_created = 0
                     state.mark_crawled(url, "instagram", keyword, content_timestamp)
                     state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
                 else:
+                    # One attempt is enough — don't re-queue the same dead/hidden post forever.
+                    consecutive_no_created += 1
+                    record["coverage"] = False
+                    record["freshness"] = "unknown"
                     print(
-                        f"[instagram-detail] leave pending (no created_at): {url}",
+                        f"[instagram-detail] drop pending (no created_at): {url}",
                         flush=True,
                     )
+                    if consecutive_no_created >= NO_CREATED_AT_ABORT:
+                        keyword_batches.setdefault(keyword, []).append(record)
+                        detailed_ok += 1
+                        print(
+                            f"[{index}/{total}] detailed {url} freshness=unknown created_at=-"
+                        )
+                        print(
+                            f"[instagram-detail] stop early: {consecutive_no_created} consecutive "
+                            f"no created_at — check login / selectors",
+                            flush=True,
+                        )
+                        break
 
                 kw_stats.comments_found += int(record.get("comments_found") or 0)
                 kw_stats.comments_crawled += int(record.get("comments_crawled") or 0)
@@ -238,16 +268,9 @@ def main() -> int:
                 keywords_processed=len(set(item.get("keyword", "") for item in post_urls)),
             )
 
-            # Clear pending_detail flags for URLs we successfully detailed with a timestamp.
-            mark_search_results_detailed(
-                INPUT_FILE,
-                {
-                    normalize_instagram_post_url(str(r.get("current_url") or r.get("url") or ""))
-                    for batch in keyword_batches.values()
-                    for r in batch
-                    if r.get("created_time") or r.get("created_at")
-                },
-            )
+            # Clear pending_detail for every URL we attempted (incl. no created_at),
+            # so the next round does not re-burn the same dead backlog.
+            mark_search_results_detailed(INPUT_FILE, {u for u in attempted_urls if u})
 
             print(f"[instagram-detail] Summary:")
             print(f"  - Fresh coverage saved: {crawled_count}")
@@ -271,14 +294,26 @@ def select_pending_urls(
     existing_urls: set[str],
     limit: int,
 ) -> list[dict]:
-    """Prefer newest search hits (tail of file) and never exceed per-round cap."""
+    """Prefer fresher search modes, then newest discoveries (tail of merge order)."""
     pending = [item for item in post_urls if item["url"] not in existing_urls]
     if limit <= 0 or len(pending) <= limit:
         return pending
-    # Search merge sorts by URL; prefer items still marked pending_detail, then reverse file order.
     pending_flagged = [i for i in pending if i.get("pending_detail", True)]
     pool = pending_flagged or pending
-    return list(reversed(pool))[:limit]
+
+    def _fresh_score(item: dict) -> int:
+        modes = {str(m).lower() for m in (item.get("search_modes") or [])}
+        score = 0
+        if modes & {"this_week", "recent", "date_week", "keyword"}:
+            score += 2
+        if modes & {"upload_date", "explore", "general_top"}:
+            score += 1
+        return score
+
+    pool_sorted = sorted(enumerate(pool), key=lambda pair: (_fresh_score(pair[1]), pair[0]))
+    # Highest freshness first among the newest half: take tail of freshness-stable order.
+    ordered = [item for _i, item in pool_sorted]
+    return ordered[-limit:]
 
 
 def mark_search_results_detailed(path: Path, done_urls: set[str]) -> None:

@@ -295,9 +295,10 @@ def resolve_input_file() -> Path:
 
 
 def select_pending_thread_urls(pending: list[dict], limit: int) -> list[dict]:
+    """Newest discoveries last in merge order — take the tail, not reversed alphabetical."""
     if limit <= 0 or len(pending) <= limit:
         return pending
-    return list(reversed(pending))[:limit]
+    return pending[-limit:]
 
 
 def should_retry_thread_record(item: dict) -> bool:

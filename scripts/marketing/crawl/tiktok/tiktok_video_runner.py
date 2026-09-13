@@ -289,7 +289,19 @@ def select_pending_urls(
         return pending
     flagged = [i for i in pending if i.get("pending_detail", True)]
     pool = flagged or pending
-    return list(reversed(pool))[:limit]
+
+    def _fresh_score(item: dict) -> int:
+        modes = {str(m).lower() for m in (item.get("search_modes") or [])}
+        score = 0
+        if modes & {"this_week", "recent", "date_week", "general_top"}:
+            score += 2
+        if modes & {"upload_date", "video_relevance"}:
+            score += 1
+        return score
+
+    pool_sorted = sorted(enumerate(pool), key=lambda pair: (_fresh_score(pair[1]), pair[0]))
+    ordered = [item for _i, item in pool_sorted]
+    return ordered[-limit:]
 
 
 def mark_search_results_detailed(path: Path, done_urls: set[str]) -> None:

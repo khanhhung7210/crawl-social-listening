@@ -506,16 +506,28 @@ def load_existing_results() -> list[dict]:
 
 
 def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
+    """Keep discovery order (no URL sort — detail was picking z* ids first)."""
     by_url: dict[str, dict] = {}
+    order: list[str] = []
     for item in existing:
-        url = item.get("url", "")
-        if url:
-            by_url[url] = item
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        if url not in by_url:
+            order.append(url)
+        by_url[url] = item
     for item in new:
-        url = item.get("url", "")
-        if url:
-            by_url[url] = item
-    return sorted(by_url.values(), key=lambda x: x.get("url", ""))
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        if url not in by_url:
+            order.append(url)
+        by_url[url] = item
+    return [by_url[url] for url in order]
 
 
 def tiktok_chrome_profile_dir() -> Path:
