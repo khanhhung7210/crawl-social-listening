@@ -73,7 +73,21 @@ def _chrome_bin() -> str:
     mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     if Path(mac).is_file():
         return mac
-    found = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chrome")
+    # Windows common installs
+    for win in (
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+    ):
+        if win.is_file():
+            return str(win)
+    found = (
+        shutil.which("google-chrome")
+        or shutil.which("chromium")
+        or shutil.which("chrome")
+        or shutil.which("chrome.exe")
+    )
     if found:
         return found
     raise RuntimeError("Không tìm thấy Google Chrome. Cài Chrome hoặc set CHROME_BIN.")

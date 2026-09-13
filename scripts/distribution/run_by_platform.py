@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +39,33 @@ def _project_root() -> Path:
 PROJECT_ROOT = _project_root()
 PIPELINE = PROJECT_ROOT / "scripts" / "distribution" / "run_distribution_pipeline.py"
 CONTINUOUS = PROJECT_ROOT / "scripts" / "distribution" / "run_continuous_distribution.py"
-CHROME_BIN = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+
+
+def _resolve_chrome_bin() -> Path:
+    env = (os.getenv("CHROME_BIN") or "").strip()
+    if env and Path(env).is_file():
+        return Path(env)
+    mac = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if mac.is_file():
+        return mac
+    for win in (
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+    ):
+        if win.is_file():
+            return win
+    which = (
+        shutil.which("google-chrome")
+        or shutil.which("chromium")
+        or shutil.which("chrome")
+        or shutil.which("chrome.exe")
+    )
+    if which:
+        return Path(which)
+    raise SystemExit("Không tìm thấy Google Chrome. Cài Chrome hoặc set CHROME_BIN.")
+
 
 # DIS ports = MKT+10. Profile riêng dis-* để không đụng user-data-dir MKT.
 PLATFORMS: dict[str, dict[str, str | int]] = {
@@ -97,19 +125,18 @@ def chrome_listening(platform: str) -> bool:
 
 
 def start_chrome(platform: str) -> None:
-    if not CHROME_BIN.exists():
-        raise SystemExit(f"Không tìm thấy Chrome: {CHROME_BIN}")
+    chrome_bin = _resolve_chrome_bin()
 
     port = int(PLATFORMS[platform]["port"])
     user_dir = profile_dir(platform)
-    log_file = Path(f"/tmp/chrome-dis-{platform}-{port}.log")
+    log_file = Path(tempfile.gettempdir()) / f"chrome-dis-{platform}-{port}.log"
 
     if chrome_listening(platform):
         log(f"Chrome DIS {platform} đã sẵn sàng tại :{port}")
         return
 
     cmd = [
-        str(CHROME_BIN),
+        str(chrome_bin),
         f"--remote-debugging-port={port}",
         "--remote-allow-origins=*",
         f"--user-data-dir={user_dir}",

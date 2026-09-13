@@ -387,9 +387,8 @@ class PipelineRunner:
                         # Timed-out / partial search may still have written URLs —
                         # let detail (or FB trailing format) salvage this round.
                         search_runner_failed = True
-                        if script_name == "facebook_raw_runner.py":
-                            # Search+detail combined; per-keyword jsonl already on disk.
-                            detail_runner_ok = True
+                        # Do NOT mark facebook attach failures as detail_ok — that
+                        # allowed empty format/filter to "succeed" after Chrome down.
                     else:
                         crawl_runner_failed = True
                         browser_runner_failed = True

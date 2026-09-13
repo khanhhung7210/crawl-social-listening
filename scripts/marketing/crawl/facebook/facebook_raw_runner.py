@@ -52,7 +52,12 @@ from social_listening.keyword_config import (
 )
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
+from social_listening.chromedriver_utils import (
+    _chrome_bin,
+    chrome_debugger_ready,
+    leave_chrome_open,
+    resolve_chromedriver_path,
+)
 from social_listening.text_utils import parse_compact_count
 from social_listening.review_utils import (
     VN_TZ,
@@ -66,6 +71,10 @@ from social_listening.crawl_freshness import (
     load_freshness_policy,
     should_spend_on_comments,
     should_stop_keyword_details,
+)
+from social_listening.crawl_reliability import (
+    attach_debugger_chrome,
+    recover_stuck_debug_chrome,
 )
 
 
@@ -482,9 +491,8 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
                 )
             return 0
         finally:
-            driver.quit()
+            leave_chrome_open(driver)
 
-def search_posts_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
     load_search_results(driver, keyword)
 
     urls: list[str] = []
@@ -804,9 +812,7 @@ def ensure_facebook_debug_chrome() -> None:
     host, port_text = DEBUGGER_ADDRESS.rsplit(":", 1)
     profile_dir = facebook_chrome_profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
-    chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if not Path(chrome_bin).is_file():
-        raise RuntimeError(f"Google Chrome not found at {chrome_bin}")
+    chrome_bin = _chrome_bin()
 
     cmd = [
         chrome_bin,
@@ -834,28 +840,10 @@ def ensure_facebook_debug_chrome() -> None:
 
 def build_driver() -> webdriver.Chrome:
     ensure_facebook_debug_chrome()
-    options = Options()
-    options.debugger_address = DEBUGGER_ADDRESS
-    try:
-        # Prefer Selenium Manager (matches installed Chrome). Avoid stale runtime chromedriver.
-        return webdriver.Chrome(options=options)
-    except SessionNotCreatedException:
-        driver_path = resolve_chromedriver_path()
-        if not driver_path:
-            raise RuntimeError(
-                "Cannot connect to Chrome remote debugging at "
-                f"{DEBUGGER_ADDRESS} and no chromedriver fallback was found."
-            )
-        try:
-            return webdriver.Chrome(service=Service(driver_path), options=options)
-        except SessionNotCreatedException as exc:
-            raise RuntimeError(
-                "Cannot connect to Chrome remote debugging at "
-                f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-                f"/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
-                f"--remote-debugging-port=9226 --remote-allow-origins=* "
-                f"--user-data-dir={facebook_chrome_profile_dir()}"
-            ) from exc
+    print(f"[facebook-search] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    # Port may answer /json/version but refuse Selenium ("unable to discover open pages").
+    recover_stuck_debug_chrome(DEBUGGER_ADDRESS)
+    return attach_debugger_chrome(DEBUGGER_ADDRESS)
 
 
 def scroll_search_results(driver: webdriver.Chrome) -> None:

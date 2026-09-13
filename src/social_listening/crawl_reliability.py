@@ -109,10 +109,22 @@ def recover_stuck_debug_chrome(address: str) -> None:
     print(f"[chrome] recovering stuck debug Chrome at {addr}", flush=True)
     try:
         blank = "about:blank"
-        url = f"http://{addr}/json/new?{urllib.parse.quote(blank, safe='')}"
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            resp.read()
-        print("[chrome] opened about:blank via /json/new", flush=True)
+        # Newer Chrome often rejects GET /json/new (405); prefer PUT/POST.
+        opened = False
+        last_exc: Exception | None = None
+        for method in ("PUT", "POST", "GET"):
+            try:
+                url = f"http://{addr}/json/new?{urllib.parse.quote(blank, safe='')}"
+                req = urllib.request.Request(url, method=method)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    resp.read()
+                print(f"[chrome] opened about:blank via /json/new ({method})", flush=True)
+                opened = True
+                break
+            except Exception as exc:
+                last_exc = exc
+        if not opened and last_exc is not None:
+            print(f"[chrome] /json/new about:blank failed: {last_exc}", flush=True)
     except Exception as exc:
         print(f"[chrome] /json/new about:blank failed: {exc}", flush=True)
 
