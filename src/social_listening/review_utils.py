@@ -98,15 +98,31 @@ def parse_relative_time_label(label: str, reference: datetime) -> datetime | Non
     return None
 
 
+def _iso_near(a: datetime | None, b: datetime | None, *, seconds: int = 300) -> bool:
+    if a is None or b is None:
+        return False
+    return abs((a - b).total_seconds()) <= seconds
+
+
 def resolve_comment_created_at(value: object, label: str, crawled_at: str) -> str:
-    normalized = normalize_created_at(value)
-    if normalized:
-        return normalized
+    """Resolve review/comment time. Never invent crawl time as the publish time.
+
+    Prefer a relative UI label (e.g. \"4 tháng trước\") over an ISO that is just
+    the crawler's clock — Maps often leaves created_at empty and only shows a label.
+    """
     reference = parse_iso_datetime(crawled_at) or datetime.now(timezone.utc)
     relative_dt = parse_relative_time_label(label, reference)
     if relative_dt is not None:
         return relative_dt.isoformat()
-    return reference.isoformat()
+
+    normalized = normalize_created_at(value)
+    if not normalized:
+        return ""
+    value_dt = parse_iso_datetime(normalized)
+    # ISO matching crawl clock (±5m) is not a real publish time.
+    if _iso_near(value_dt, reference):
+        return ""
+    return normalized
 
 
 def normalize_rating(value: object) -> float | None:

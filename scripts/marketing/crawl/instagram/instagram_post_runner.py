@@ -59,6 +59,12 @@ COMMENT_SCROLL_PAUSE_SECONDS = float(os.getenv("INSTAGRAM_COMMENT_SCROLL_PAUSE_S
 DETAIL_KEYWORD_RUNTIME_SECONDS = int(
     os.getenv("INSTAGRAM_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
 )
+# Hard cap so we never try to detail 2k+ backlog inside a 1800s pipeline stage.
+DETAIL_MAX_URLS = int(os.getenv("INSTAGRAM_DETAIL_MAX_URLS", str(max(FINAL_LIMIT, 80))) or "80")
+# Finish ourselves before PIPELINE_CRAWL_STAGE_TIMEOUT (default 1800) kills the tree.
+DETAIL_MAX_RUNTIME_SECONDS = int(
+    os.getenv("INSTAGRAM_DETAIL_MAX_RUNTIME_SECONDS", "1500") or "1500"
+)
 
 
 def main() -> int:
@@ -75,11 +81,15 @@ def main() -> int:
 
     records = load_existing_records(OUTPUT_FILE)
     existing_urls = collect_existing_post_urls(records)
-    pending_urls = [item for item in post_urls if item["url"] not in existing_urls]
+    pending_urls = select_pending_urls(post_urls, existing_urls, DETAIL_MAX_URLS)
 
     print(f"[instagram-detail] Total URLs: {len(post_urls)}")
     print(f"[instagram-detail] Already crawled: {len(existing_urls)}")
-    print(f"[instagram-detail] Pending: {len(pending_urls)}")
+    print(f"[instagram-detail] Pending this round: {len(pending_urls)} (cap={DETAIL_MAX_URLS})")
+    print(
+        f"[instagram-detail] Runtime budget={DETAIL_MAX_RUNTIME_SECONDS}s "
+        f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+    )
 
     if not pending_urls:
         print(f"no pending posts; {len(records)} records already saved in {OUTPUT_FILE.resolve()}")
@@ -90,6 +100,8 @@ def main() -> int:
         stale_by_keyword: dict[str, int] = {}
         started_by_keyword: dict[str, float] = {}
         stats_by_keyword: dict[str, KeywordCrawlStats] = {}
+        run_started = time.monotonic()
+        stopped_for_runtime = False
 
         driver = build_driver()
         try:
@@ -97,6 +109,7 @@ def main() -> int:
             crawled_count = 0
             stale_count = 0
             failed_count = 0
+            detailed_ok = 0
 
             print(
                 f"[instagram-detail] Policy lookback={POLICY.lookback_days:.1f}d "
@@ -110,6 +123,15 @@ def main() -> int:
 
             keyword_batches: dict[str, list[dict]] = {}
             for index, item in enumerate(pending_urls, start=1):
+                if time.monotonic() - run_started >= DETAIL_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[instagram-detail] stop early: detail_runtime_limit "
+                        f"({DETAIL_MAX_RUNTIME_SECONDS}s) at {index - 1}/{total}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 url = item["url"]
                 keyword = item["keyword"]
                 kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
@@ -150,8 +172,15 @@ def main() -> int:
                 attach_freshness_fields(record, content_timestamp, POLICY)
                 freshness = record.get("freshness") or "unknown"
 
-                state.mark_crawled(url, "instagram", keyword, content_timestamp)
-                state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
+                # Never mark unknown/empty time as done — IG often hides createTime; retry later.
+                if content_timestamp:
+                    state.mark_crawled(url, "instagram", keyword, content_timestamp)
+                    state.mark_crawled(url, "instagram_detail", keyword, content_timestamp)
+                else:
+                    print(
+                        f"[instagram-detail] leave pending (no created_at): {url}",
+                        flush=True,
+                    )
 
                 kw_stats.comments_found += int(record.get("comments_found") or 0)
                 kw_stats.comments_crawled += int(record.get("comments_crawled") or 0)
@@ -162,6 +191,7 @@ def main() -> int:
                     stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
 
                 keyword_batches.setdefault(keyword, []).append(record)
+                detailed_ok += 1
                 print(
                     f"[{index}/{total}] detailed {url} freshness={freshness} "
                     f"created_at={content_timestamp or '-'}"
@@ -208,15 +238,68 @@ def main() -> int:
                 keywords_processed=len(set(item.get("keyword", "") for item in post_urls)),
             )
 
+            # Clear pending_detail flags for URLs we successfully detailed with a timestamp.
+            mark_search_results_detailed(
+                INPUT_FILE,
+                {
+                    normalize_instagram_post_url(str(r.get("current_url") or r.get("url") or ""))
+                    for batch in keyword_batches.values()
+                    for r in batch
+                    if r.get("created_time") or r.get("created_at")
+                },
+            )
+
             print(f"[instagram-detail] Summary:")
             print(f"  - Fresh coverage saved: {crawled_count}")
+            print(f"  - Detailed ok this round: {detailed_ok}")
             print(f"  - Stale skipped: {stale_count}")
             print(f"  - Failed: {failed_count}")
             print(f"  - Total saved: {len(records)}")
             print(f"  - Output: {OUTPUT_FILE.resolve()}")
+            if stopped_for_runtime:
+                print(
+                    "[instagram-detail] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             driver.quit()
+
+
+def select_pending_urls(
+    post_urls: list[dict],
+    existing_urls: set[str],
+    limit: int,
+) -> list[dict]:
+    """Prefer newest search hits (tail of file) and never exceed per-round cap."""
+    pending = [item for item in post_urls if item["url"] not in existing_urls]
+    if limit <= 0 or len(pending) <= limit:
+        return pending
+    # Search merge sorts by URL; prefer items still marked pending_detail, then reverse file order.
+    pending_flagged = [i for i in pending if i.get("pending_detail", True)]
+    pool = pending_flagged or pending
+    return list(reversed(pool))[:limit]
+
+
+def mark_search_results_detailed(path: Path, done_urls: set[str]) -> None:
+    if not done_urls or not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, list):
+        return
+    changed = False
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        url = normalize_instagram_post_url(str(item.get("url") or ""))
+        if url and url in done_urls and item.get("pending_detail", True):
+            item["pending_detail"] = False
+            changed = True
+    if changed:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_post_urls(path: Path) -> list[dict]:
@@ -237,8 +320,17 @@ def load_post_urls(path: Path) -> list[dict]:
         url = normalize_instagram_post_url(str(item.get("url") or "").strip())
         if not url or url in seen:
             continue
+        # Skip items already detailed in a previous round (pending_detail=false).
+        if item.get("pending_detail") is False:
+            continue
         seen.add(url)
-        urls.append({"keyword": str(item.get("keyword") or "").strip(), "url": url})
+        urls.append(
+            {
+                "keyword": str(item.get("keyword") or "").strip(),
+                "url": url,
+                "pending_detail": bool(item.get("pending_detail", True)),
+            }
+        )
     return urls
 
 
@@ -309,6 +401,8 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
     matched_terms = [term for term in search_terms if contains_keyword(normalize_text(body_text), term)]
 
     created_dt = extract_unix_create_time_from_html(page_source)
+    if created_dt is None:
+        created_dt = extract_datetime_from_dom(driver)
     created_time = created_dt.isoformat() if created_dt else ""
     freshness = classify_detail_freshness(created_time, POLICY)
 
@@ -340,6 +434,32 @@ def crawl_post(driver: webdriver.Chrome, url: str, keyword: str, search_terms: l
     }
     attach_freshness_fields(record, created_time, POLICY)
     return record
+
+
+def extract_datetime_from_dom(driver: webdriver.Chrome) -> datetime | None:
+    """Instagram post pages often expose <time datetime=\"...\"> when JSON blobs omit taken_at."""
+    try:
+        values = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll('time[datetime]'))
+              .map((node) => node.getAttribute('datetime') || '')
+              .filter(Boolean);
+            """
+        )
+    except Exception:
+        return None
+    for raw in values or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            continue
+    return None
 
 
 def build_driver() -> webdriver.Chrome:

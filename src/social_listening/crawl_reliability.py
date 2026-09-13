@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Callable
 
 from selenium import webdriver
@@ -20,6 +24,10 @@ from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_c
 
 def chrome_attach_timeout_seconds() -> float:
     return float(os.getenv("CHROME_ATTACH_TIMEOUT_SECONDS", "90") or "90")
+
+
+def chrome_attach_retries() -> int:
+    return max(1, int(os.getenv("CHROME_ATTACH_RETRIES", "3") or "3"))
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -88,23 +96,70 @@ def kill_orphaned_chromedrivers(*, parent_pid: int | None = None) -> int:
     return killed
 
 
-def attach_debugger_chrome(
+def recover_stuck_debug_chrome(address: str) -> None:
+    """
+    Unstick a debug Chrome that answers /json/version but refuses Selenium attach.
+
+    Opens about:blank via DevTools HTTP and closes surplus page targets so the
+    next chromedriver handshake is not blocked on a hung YouTube/captcha tab.
+    """
+    addr = (address or "").strip()
+    if not addr:
+        return
+    print(f"[chrome] recovering stuck debug Chrome at {addr}", flush=True)
+    try:
+        blank = "about:blank"
+        url = f"http://{addr}/json/new?{urllib.parse.quote(blank, safe='')}"
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            resp.read()
+        print("[chrome] opened about:blank via /json/new", flush=True)
+    except Exception as exc:
+        print(f"[chrome] /json/new about:blank failed: {exc}", flush=True)
+
+    try:
+        with urllib.request.urlopen(f"http://{addr}/json/list", timeout=8) as resp:
+            tabs = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(tabs, list):
+            return
+        pages = [t for t in tabs if isinstance(t, dict) and t.get("type") == "page"]
+        # Keep the newest blank-ish tab; close older pages that may be wedged.
+        keep_id = None
+        for t in reversed(pages):
+            u = str(t.get("url") or "")
+            if u.startswith("about:blank") or u in {"", "chrome://newtab/"}:
+                keep_id = t.get("id")
+                break
+        if keep_id is None and pages:
+            keep_id = pages[-1].get("id")
+        closed = 0
+        for t in pages:
+            tid = t.get("id")
+            if not tid or tid == keep_id:
+                continue
+            try:
+                with urllib.request.urlopen(f"http://{addr}/json/close/{tid}", timeout=5) as resp:
+                    resp.read()
+                closed += 1
+            except Exception:
+                pass
+        if closed:
+            print(f"[chrome] closed {closed} surplus page target(s)", flush=True)
+        if keep_id:
+            try:
+                with urllib.request.urlopen(f"http://{addr}/json/activate/{keep_id}", timeout=5) as resp:
+                    resp.read()
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"[chrome] recover list/close failed: {exc}", flush=True)
+
+
+def _attach_debugger_chrome_once(
     address: str,
     *,
-    timeout_s: float | None = None,
+    timeout_s: float,
     resolve_driver: bool = True,
 ) -> webdriver.Chrome:
-    """
-    Attach Selenium to an existing debug Chrome with a hard timeout.
-
-    Without this, webdriver.Chrome(debugger_address=...) can hang for hours
-    when the port answers /json/version but DevTools handshake stalls
-    (common when MKT+DIS fight the same browser, or Chrome is mid-navigation).
-
-    On timeout: do not wait for the hung worker thread (would block forever),
-    and kill orphan chromedriver children of this process so the next round
-    can attach again without a manual kill.
-    """
     addr = (address or "").strip()
     if not addr:
         raise ValueError("debugger address is required")
@@ -115,8 +170,7 @@ def attach_debugger_chrome(
             f"Check: curl http://{addr}/json/version"
         )
 
-    limit = chrome_attach_timeout_seconds() if timeout_s is None else float(timeout_s)
-    limit = max(15.0, limit)
+    limit = max(15.0, float(timeout_s))
     print(
         f"[chrome] attaching Selenium to {addr} (timeout={limit:.0f}s) "
         f"browser={ready.get('Browser', '?')}",
@@ -126,6 +180,14 @@ def attach_debugger_chrome(
     def _connect() -> webdriver.Chrome:
         options = Options()
         options.debugger_address = addr
+        # Avoid hanging on a forever-loading YouTube/captcha document.
+        try:
+            options.page_load_strategy = "eager"
+        except Exception:
+            pass
+        driver_path = resolve_chromedriver_path() if resolve_driver else ""
+        if driver_path:
+            return webdriver.Chrome(service=Service(driver_path), options=options)
         try:
             return webdriver.Chrome(options=options)
         except SessionNotCreatedException:
@@ -136,8 +198,6 @@ def attach_debugger_chrome(
                 return webdriver.Chrome(service=Service(driver_path), options=options)
             return webdriver.Chrome(options=options)
 
-    # Do NOT use `with ThreadPoolExecutor` — on timeout, __exit__ waits for the
-    # hung connect thread and can leave an orphan chromedriver after success.
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     fut = pool.submit(_connect)
     try:
@@ -163,6 +223,53 @@ def attach_debugger_chrome(
 
     print(f"[chrome] attached OK {addr}", flush=True)
     return driver
+
+
+def attach_debugger_chrome(
+    address: str,
+    *,
+    timeout_s: float | None = None,
+    resolve_driver: bool = True,
+    retries: int | None = None,
+) -> webdriver.Chrome:
+    """
+    Attach Selenium to an existing debug Chrome with a hard timeout + retries.
+
+    Without this, webdriver.Chrome(debugger_address=...) can hang for hours
+    when the port answers /json/version but DevTools handshake stalls
+    (common when MKT+DIS fight the same browser, or Chrome is mid-navigation).
+
+    On timeout: kill orphan chromedriver children, recover via CDP /json/new,
+    then retry attach before failing the round.
+    """
+    addr = (address or "").strip()
+    if not addr:
+        raise ValueError("debugger address is required")
+    limit = chrome_attach_timeout_seconds() if timeout_s is None else float(timeout_s)
+    attempts = chrome_attach_retries() if retries is None else max(1, int(retries))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return _attach_debugger_chrome_once(
+                addr,
+                timeout_s=limit,
+                resolve_driver=resolve_driver,
+            )
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[chrome] attach attempt {attempt}/{attempts} failed: {exc}",
+                flush=True,
+            )
+            kill_orphaned_chromedrivers()
+            if attempt >= attempts:
+                break
+            recover_stuck_debug_chrome(addr)
+            time.sleep(2.0)
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def _norm(text: str) -> str:

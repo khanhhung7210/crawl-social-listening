@@ -27,10 +27,11 @@ from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import DATA_DIR, ensure_dir
 from social_listening.text_utils import contains_keyword, normalize_text
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import leave_chrome_open
+from social_listening.chromedriver_utils import chrome_debugger_ready, leave_chrome_open
 from social_listening.crawl_reliability import (
     assert_social_session,
     attach_debugger_chrome,
+    recover_stuck_debug_chrome,
 )
 from social_listening.crawl_freshness import (
     attach_freshness_fields,
@@ -277,6 +278,13 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
 
 def build_driver() -> webdriver.Chrome:
     print(f"[youtube-detail] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    if not chrome_debugger_ready(DEBUGGER_ADDRESS, timeout=3.0):
+        raise RuntimeError(
+            f"Chrome debug not ready at {DEBUGGER_ADDRESS}. "
+            "Start YouTube debug Chrome (port 9225) then retry."
+        )
+    # Proactive unstick — search often left DevTools wedged before detail starts.
+    recover_stuck_debug_chrome(DEBUGGER_ADDRESS)
     driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
     assert_social_session(driver, "youtube")
     return driver

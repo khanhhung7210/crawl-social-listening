@@ -66,6 +66,10 @@ DEBUG_COMMENTS = str(os.getenv("TIKTOK_DEBUG_COMMENTS", "")).strip().lower() in 
 DETAIL_KEYWORD_RUNTIME_SECONDS = int(
     os.getenv("TIKTOK_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
 )
+DETAIL_MAX_URLS = int(os.getenv("TIKTOK_DETAIL_MAX_URLS", str(max(FINAL_LIMIT, 80))) or "80")
+DETAIL_MAX_RUNTIME_SECONDS = int(
+    os.getenv("TIKTOK_DETAIL_MAX_RUNTIME_SECONDS", "1500") or "1500"
+)
 
 
 def main() -> int:
@@ -86,7 +90,7 @@ def main() -> int:
     output_path = OUTPUT_FILE
     records = load_existing_records(output_path)
     completed_urls = collect_completed_video_urls(records)
-    pending_urls = [item for item in video_urls if item["url"] not in completed_urls]
+    pending_urls = select_pending_urls(video_urls, completed_urls, DETAIL_MAX_URLS)
 
     if not pending_urls:
         print(f"no pending videos; {len(records)} records already saved in {output_path.resolve()}")
@@ -98,12 +102,19 @@ def main() -> int:
         urls_stale = 0
         urls_failed = 0
         urls_skipped = len(completed_urls)
+        detailed_ok = 0
         stale_by_keyword: dict[str, int] = {}
         started_by_keyword: dict[str, float] = {}
         stats_by_keyword: dict[str, KeywordCrawlStats] = {}
+        run_started = time.monotonic()
+        stopped_for_runtime = False
 
-        print(f"[tiktok-detail] URLs to crawl: {len(pending_urls)}")
-        print(f"[tiktok-detail] URLs skipped: {urls_skipped}")
+        print(f"[tiktok-detail] URLs to crawl this round: {len(pending_urls)} (cap={DETAIL_MAX_URLS})")
+        print(f"[tiktok-detail] URLs skipped (already done): {urls_skipped}")
+        print(
+            f"[tiktok-detail] Runtime budget={DETAIL_MAX_RUNTIME_SECONDS}s "
+            f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+        )
         print(
             f"[tiktok-detail] Policy lookback={POLICY.lookback_days:.1f}d "
             f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
@@ -116,10 +127,19 @@ def main() -> int:
 
         driver = build_driver()
         try:
-            # Detail all candidates first (search already capped at DISCOVERY).
+            # Detail capped candidates first (search already capped at DISCOVERY).
             keyword_batches: dict[str, list[dict]] = {}
             total = len(pending_urls)
             for index, item in enumerate(pending_urls, start=1):
+                if time.monotonic() - run_started >= DETAIL_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[tiktok-detail] stop early: detail_runtime_limit "
+                        f"({DETAIL_MAX_RUNTIME_SECONDS}s) at {index - 1}/{total}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 url = item["url"]
                 keyword = item["keyword"]
                 kw_stats = stats_by_keyword.setdefault(keyword, KeywordCrawlStats(keyword=keyword or "(none)"))
@@ -171,8 +191,11 @@ def main() -> int:
                 attach_freshness_fields(record, content_timestamp, POLICY)
                 freshness = record.get("freshness") or "unknown"
 
-                state.mark_crawled(url, "tiktok", keyword, content_timestamp)
-                state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
+                if content_timestamp:
+                    state.mark_crawled(url, "tiktok", keyword, content_timestamp)
+                    state.mark_crawled(url, "tiktok_detail", keyword, content_timestamp)
+                else:
+                    print(f"[tiktok-detail] leave pending (no created_time): {url}", flush=True)
 
                 kw_stats.comments_found += int(record.get("comments_found") or 0)
                 kw_stats.comments_crawled += int(record.get("comments_crawled") or 0)
@@ -183,6 +206,7 @@ def main() -> int:
                     stale_by_keyword[keyword] = stale_by_keyword.get(keyword, 0) + 1
 
                 keyword_batches.setdefault(keyword, []).append(record)
+                detailed_ok += 1
                 print(
                     f"[{index}/{total}] detailed {url} freshness={freshness} "
                     f"created_time={content_timestamp or '-'}"
@@ -228,15 +252,65 @@ def main() -> int:
                 keywords_processed=len(set(item["keyword"] for item in video_urls)),
             )
 
+            mark_search_results_detailed(
+                input_file,
+                {
+                    normalize_tiktok_video_url(str(r.get("current_url") or r.get("url") or ""))
+                    for batch in keyword_batches.values()
+                    for r in batch
+                    if r.get("created_time")
+                },
+            )
+
             print(f"[tiktok-detail] Summary:")
             print(f"  - Final coverage saved: {urls_crawled}")
+            print(f"  - Detailed ok this round: {detailed_ok}")
             print(f"  - Stale annotated: {urls_stale}")
             print(f"  - Failed: {urls_failed}")
             print(f"  - Total records: {len(records)}")
             print(f"  - Output: {output_path.resolve()}")
+            if stopped_for_runtime:
+                print(
+                    "[tiktok-detail] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             driver.quit()
+
+
+def select_pending_urls(
+    video_urls: list[dict],
+    completed_urls: set[str],
+    limit: int,
+) -> list[dict]:
+    pending = [item for item in video_urls if item["url"] not in completed_urls]
+    if limit <= 0 or len(pending) <= limit:
+        return pending
+    flagged = [i for i in pending if i.get("pending_detail", True)]
+    pool = flagged or pending
+    return list(reversed(pool))[:limit]
+
+
+def mark_search_results_detailed(path: Path, done_urls: set[str]) -> None:
+    if not done_urls or not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, list):
+        return
+    changed = False
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        url = normalize_tiktok_video_url(str(item.get("url") or ""))
+        if url and url in done_urls and item.get("pending_detail", True):
+            item["pending_detail"] = False
+            changed = True
+    if changed:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def resolve_input_file() -> Path:
@@ -266,8 +340,16 @@ def load_video_urls(path: Path) -> list[dict]:
         url = normalize_tiktok_video_url(str(item.get("url") or "").strip())
         if not url or url in seen:
             continue
+        if item.get("pending_detail") is False:
+            continue
         seen.add(url)
-        urls.append({"keyword": str(item.get("keyword") or "").strip(), "url": url})
+        urls.append(
+            {
+                "keyword": str(item.get("keyword") or "").strip(),
+                "url": url,
+                "pending_detail": bool(item.get("pending_detail", True)),
+            }
+        )
     return urls
 
 
@@ -306,6 +388,9 @@ def should_retry_record(item: dict) -> bool:
     # Stale skip markers are terminal — do not re-detail as coverage.
     if item.get("stale") or item.get("freshness") == "stale" or item.get("coverage") is False:
         return False
+    # Missing publish time → retry (was marked done with freshness=unknown forever).
+    if not (item.get("created_time") or item.get("published_at") or item.get("createTime")):
+        return True
     if item.get("raw_html") and item.get("current_url"):
         return False
     return bool(item.get("error"))
@@ -377,10 +462,10 @@ def dedupe_records(records: list[dict]) -> list[dict]:
 def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: list[str]) -> dict:
     driver.get(url)
     try:
-        wait_for_tiktok_side_panel(driver, timeout=max(INITIAL_VIDEO_WAIT_SECONDS, 6))
+        wait_for_tiktok_side_panel(driver, timeout=min(max(INITIAL_VIDEO_WAIT_SECONDS, 4), 8))
     except TimeoutException:
         print(f"[tiktok] side panel wait timeout, continue anyway: {url}")
-    time.sleep(INITIAL_VIDEO_WAIT_SECONDS)
+    time.sleep(min(INITIAL_VIDEO_WAIT_SECONDS, 4))
 
     if has_captcha_or_challenge(driver):
         print(f"[tiktok] captcha/challenge detected, waiting on {url}")
@@ -398,7 +483,7 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
         document.querySelector('[class*="DivPlayerContainer"]');
     if (videoArea) videoArea.click();
     """)
-    time.sleep(COMMENT_PANEL_WAIT_SECONDS)
+    time.sleep(min(COMMENT_PANEL_WAIT_SECONDS, 1.5))
 
     page_source = driver.page_source
     body_text = driver.execute_script("return document.body ? document.body.innerText : '';") or ""
@@ -409,6 +494,10 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     matched = bool(matched_terms)
 
     created_dt = extract_unix_create_time_from_html(page_source)
+    if created_dt is None:
+        created_dt = extract_datetime_from_dom(driver)
+    if created_dt is None:
+        created_dt = created_time_from_tiktok_video_id(current_url or url)
     created_time = created_dt.isoformat() if created_dt else ""
     freshness = classify_detail_freshness(created_time, POLICY)
 
@@ -437,6 +526,50 @@ def crawl_video(driver: webdriver.Chrome, url: str, keyword: str, search_terms: 
     }
     attach_freshness_fields(record, created_time, POLICY)
     return record
+
+
+def extract_datetime_from_dom(driver: webdriver.Chrome) -> datetime | None:
+    try:
+        values = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll('time[datetime], [data-e2e="browser-nickname"] span, span'))
+              .map((node) => node.getAttribute('datetime') || '')
+              .filter(Boolean);
+            """
+        )
+    except Exception:
+        return None
+    for raw in values or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            continue
+    return None
+
+
+def created_time_from_tiktok_video_id(url: str) -> datetime | None:
+    """Best-effort publish time from TikTok snowflake video id (when HTML hides createTime)."""
+    match = re.search(r"/video/(\d{10,})", url or "")
+    if not match:
+        return None
+    try:
+        video_id = int(match.group(1))
+    except Exception:
+        return None
+    # High 32 bits ≈ unix seconds (verified ±10s vs page createTime on 2026 samples).
+    ts = video_id >> 32
+    if ts < 1_400_000_000 or ts > 2_200_000_000:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except Exception:
+        return None
 
 
 def build_driver() -> webdriver.Chrome:

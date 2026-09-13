@@ -310,6 +310,7 @@ class PipelineRunner:
         self.log("=" * 60, "INFO")
 
         crawl_runner_failed = False
+        browser_runner_failed = False
 
         for step in self.config.get("steps") or []:
             stage = str(step.get("stage") or "crawl")
@@ -326,6 +327,16 @@ class PipelineRunner:
                 self.log(
                     f"Skipping {script_name} — crawl runner failed earlier "
                     "(avoid reprocessing stale data)",
+                    "SKIP",
+                )
+                self.stats["skipped"].append(script_name)
+                continue
+
+            # Search attach timeout → do not burn another 90s on detail attach.
+            if browser_runner_failed and script_name.endswith("_runner.py"):
+                self.log(
+                    f"Skipping {script_name} — earlier browser runner failed "
+                    "(Chrome attach/session)",
                     "SKIP",
                 )
                 self.stats["skipped"].append(script_name)
@@ -352,6 +363,7 @@ class PipelineRunner:
             if not self.run_command(script, label, extra_args=extra_args or None):
                 if stage == "crawl" and script_name.endswith("_runner.py"):
                     crawl_runner_failed = True
+                    browser_runner_failed = True
                 if not self.args.continue_on_error:
                     return False
 

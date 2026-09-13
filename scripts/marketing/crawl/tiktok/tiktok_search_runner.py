@@ -65,6 +65,17 @@ PAGE_LOAD_WAIT_SECONDS = float(os.getenv("TIKTOK_PAGE_LOAD_WAIT_SECONDS", "5.0")
 MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("tiktok") / "tiktok_search_results.json"
+# Finish ourselves before PIPELINE_CRAWL_STAGE_TIMEOUT (default 1800) kills the tree.
+SEARCH_MAX_RUNTIME_SECONDS = int(os.getenv("TIKTOK_SEARCH_MAX_RUNTIME_SECONDS", "1500") or "1500")
+SEARCH_PENDING_CAP = int(os.getenv("TIKTOK_SEARCH_PENDING_CAP", "400") or "400")
+# Logs 2026-09-13: date_week + video_relevance almost always idle=0; general_top works.
+# Default to general_top only; set TIKTOK_SEARCH_MODES=date_week,video_relevance,general_top to restore.
+SEARCH_MODES = [
+    m.strip()
+    for m in str(os.getenv("TIKTOK_SEARCH_MODES", "general_top") or "general_top").split(",")
+    if m.strip()
+]
+WEAK_MODE_IDLE_ROUNDS = int(os.getenv("TIKTOK_WEAK_MODE_IDLE_ROUNDS", "2") or "2")
 
 # Smoke 2026-09-11 (web TikTok, keyword "rạp galaxy"):
 # - sort_type / publish_time stay in URL but barely change SERP vs default
@@ -100,9 +111,12 @@ def main() -> int:
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[tiktok-search] Note: crawl Date-week URL (sort_type=3&publish_time=7) + "
-            "video Relevance + general Top; web date params are weak so merge SERPs; "
-            "UI Filters backup; FINAL newest sort still happens at detail"
+            f"[tiktok-search] Modes={SEARCH_MODES} search_runtime_budget={SEARCH_MAX_RUNTIME_SECONDS}s "
+            f"pending_cap={SEARCH_PENDING_CAP}"
+        )
+        print(
+            "[tiktok-search] Note: default mode=general_top only (date_week/video_relevance "
+            "were burning ~1min/keyword with 0 hits). Override via TIKTOK_SEARCH_MODES."
         )
 
         run_id = state.start_run("tiktok", run_type)
@@ -115,8 +129,19 @@ def main() -> int:
             global_seen: set[str] = set()
             urls_discovered = 0
             urls_new = 0
+            run_started = time.monotonic()
+            stopped_for_runtime = False
 
             for index, keyword in enumerate(search_terms, start=1):
+                if time.monotonic() - run_started >= SEARCH_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[tiktok-search] stop early: search_runtime_limit "
+                        f"({SEARCH_MAX_RUNTIME_SECONDS}s) at keyword {index - 1}/{len(search_terms)}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 hb.update("keyword", f"{index}/{len(search_terms)} {keyword!r}")
                 print(f"[tiktok-search] {index}/{len(search_terms)} keyword={keyword}", flush=True)
                 try:
@@ -155,6 +180,7 @@ def main() -> int:
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
             merged = merge_results(existing_results, new_results)
+            merged = prune_search_backlog(merged, SEARCH_PENDING_CAP)
 
             OUTPUT_FILE.write_text(
                 json.dumps(merged, ensure_ascii=False, indent=2),
@@ -173,6 +199,11 @@ def main() -> int:
             print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
             print(f"  - New URLs queued for detail: {urls_new}", flush=True)
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
+            if stopped_for_runtime:
+                print(
+                    "[tiktok-search] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             hb.stop()
@@ -231,6 +262,11 @@ def search_videos_for_keyword_incremental(
         scroll_rounds = 0
         mode_full = False
         duplicate_only_rounds = 0
+        idle_limit = (
+            WEAK_MODE_IDLE_ROUNDS
+            if mode in {"date_week", "video_relevance"}
+            else IDLE_ROUNDS_BEFORE_STOP
+        )
 
         for _ in range(MAX_SCROLL_ROUNDS):
             scroll_rounds += 1
@@ -291,10 +327,10 @@ def search_videos_for_keyword_incremental(
                     f"mode_count={mode_counts.get(mode, 0)}/{mode_budget} idle={idle_rounds}",
                     flush=True,
                 )
-            if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
+            if idle_rounds >= idle_limit:
                 stop_reason = "idle_limit"
                 break
-            if empty_rounds >= MAX_EMPTY_ROUNDS_BEFORE_SKIP:
+            if empty_rounds >= min(MAX_EMPTY_ROUNDS_BEFORE_SKIP, idle_limit):
                 stop_reason = "empty_limit"
                 break
 
@@ -329,10 +365,12 @@ def search_videos_for_keyword_incremental(
     if stop_reason in {"runtime_limit", "keyword_runtime_limit"} and urls:
         status = "partial"
 
-    # Leave browser on date-posted URL so a watching human doesn't only see Relevance.
+    # Leave browser on the primary mode used this run.
     try:
-        driver.get(f"https://www.tiktok.com/search/video?q={quote(keyword)}&{TIKTOK_DATE_WEEK_QS}")
-        time.sleep(1.0)
+        primary = resolve_search_urls(keyword)
+        if primary:
+            driver.get(primary[0][0])
+            time.sleep(1.0)
     except Exception:
         pass
 
@@ -348,11 +386,35 @@ def search_videos_for_keyword_incremental(
 
 def resolve_search_urls(keyword: str) -> list[tuple[str, str]]:
     q = quote(keyword)
-    return [
-        (f"https://www.tiktok.com/search/video?q={q}&{TIKTOK_DATE_WEEK_QS}", "date_week"),
-        (f"https://www.tiktok.com/search/video?q={q}", "video_relevance"),
-        (f"https://www.tiktok.com/search?q={q}", "general_top"),
-    ]
+    catalog = {
+        "date_week": (f"https://www.tiktok.com/search/video?q={q}&{TIKTOK_DATE_WEEK_QS}", "date_week"),
+        "video_relevance": (f"https://www.tiktok.com/search/video?q={q}", "video_relevance"),
+        "general_top": (f"https://www.tiktok.com/search?q={q}", "general_top"),
+    }
+    modes = SEARCH_MODES or ["general_top"]
+    out: list[tuple[str, str]] = []
+    for mode in modes:
+        item = catalog.get(mode)
+        if item:
+            out.append(item)
+    return out or [catalog["general_top"]]
+
+
+def prune_search_backlog(results: list[dict], pending_cap: int) -> list[dict]:
+    if pending_cap <= 0:
+        return results
+    pending = [r for r in results if isinstance(r, dict) and r.get("pending_detail", True)]
+    done = [r for r in results if isinstance(r, dict) and r.get("pending_detail") is False]
+    other = [r for r in results if not isinstance(r, dict)]
+    if len(pending) <= pending_cap:
+        return results
+    kept = pending[-pending_cap:]
+    print(
+        f"[tiktok-search] prune pending backlog {len(pending)} → {len(kept)} "
+        f"(dropped {len(pending) - len(kept)})",
+        flush=True,
+    )
+    return done + kept + other
 
 
 def ensure_mode_url(driver: webdriver.Chrome, expected_url: str, mode: str) -> str:

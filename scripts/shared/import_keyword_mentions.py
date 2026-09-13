@@ -135,8 +135,22 @@ def parse_dt(value, *, reference: datetime | None = None) -> datetime | None:
 
 def resolve_comment_occurred_at(comment: dict, parent_item: dict | None = None) -> tuple[datetime | None, str]:
     """Return (occurred_at, date_source) for a comment/review mention."""
-    dt = parse_dt(comment.get("created_at") or comment.get("commented_at"))
+    label = str(comment.get("created_at_label") or comment.get("commented_at_label") or "").strip()
+    if label:
+        dt = parse_dt(label)
+        if dt is not None:
+            # Compact relative-only crumbs (13h) stay unverified; full VI/EN phrases are OK.
+            if is_relative_only_time_label(label):
+                return dt, "relative_unverified"
+            return dt, "parsed"
+
+    raw_created = comment.get("created_at") or comment.get("commented_at")
+    dt = parse_dt(raw_created)
+    parent_crawl = parse_dt((parent_item or {}).get("post_created_at") or (parent_item or {}).get("crawled_at"))
     if dt is not None:
+        # Google format used to stamp crawl time into created_at — treat as unknown.
+        if parent_crawl is not None and abs((dt - parent_crawl).total_seconds()) <= 300:
+            return None, "crawl_fallback"
         return dt, "parsed"
 
     dt = parse_dt((parent_item or {}).get("post_created_at"))
@@ -492,9 +506,11 @@ def upsert_comment_mentions(
                     continue
         commented_at, date_source = resolve_comment_occurred_at(c, parent_item)
         if date_source == "crawl_fallback":
-            if platform != "google":
+            # Never invent "now" — that made old Google reviews look brand-new in Hot News.
+            if platform == "google":
+                commented_at = None
+            else:
                 continue
-            commented_at = commented_at or datetime.utcnow()
         ext = str(c.get("external_id") or c.get("id") or hashlib_fallback(c)).strip()
         if not ext:
             ext = hashlib_fallback(c)
@@ -541,6 +557,30 @@ def upsert_comment_mentions(
         ):
             continue
 
+        # Google Maps opaque review ids rotate — reuse same place + body when possible.
+        twin_ext = None
+        if platform == "google":
+            cur.execute(
+                """
+                SELECT c.comment_id::text, c.external_comment_id
+                FROM comments c
+                WHERE c.post_id = %s::uuid
+                  AND LEFT(COALESCE(c.comment_text, ''), 160) = LEFT(%s, 160)
+                ORDER BY c.updated_at DESC NULLS LAST, c.created_at ASC
+                LIMIT 1
+                """,
+                (post_id, text),
+            )
+            twin = cur.fetchone()
+            if twin and twin[1]:
+                twin_ext = str(twin[1])
+                if twin_ext != ext:
+                    ext = twin_ext
+
+        # No publish time and no existing row to refresh → skip (don't invent "now").
+        if platform == "google" and commented_at is None and not twin_ext:
+            continue
+
         comment_meta = json.dumps(
             {
                 **({"rating": c["rating"]} if c.get("rating") is not None else {}),
@@ -578,7 +618,12 @@ def upsert_comment_mentions(
             ),
         )
         comment_id, inserted = cur.fetchone()
-        sentiment = detect_sentiment(text)
+        rating_raw = c.get("rating")
+        try:
+            rating_num = float(rating_raw) if rating_raw is not None and rating_raw != "" else None
+        except (TypeError, ValueError):
+            rating_num = None
+        sentiment = detect_sentiment(text, rating=rating_num)
 
         cur.execute(
             """
@@ -594,12 +639,13 @@ def upsert_comment_mentions(
         occurred_value = commented_at
         if mrow:
             mention_id = mrow[0]
+            # Preserve a known publish time when this crawl could not resolve one.
             cur.execute(
                 """
                 UPDATE mentions SET
                     content_text = %s,
                     sentiment = COALESCE(%s, sentiment),
-                    occurred_at = %s,
+                    occurred_at = COALESCE(%s, occurred_at),
                     permalink = COALESCE(%s, permalink),
                     metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
                     updated_at = NOW()
@@ -608,6 +654,8 @@ def upsert_comment_mentions(
                 (text, sentiment, occurred_value, comment_url, mention_meta, mention_id),
             )
         else:
+            if occurred_value is None:
+                continue
             cur.execute(
                 """
                 INSERT INTO mentions (

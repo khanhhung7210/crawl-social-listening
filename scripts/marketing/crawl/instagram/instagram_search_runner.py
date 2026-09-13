@@ -50,6 +50,7 @@ from social_listening.crawl_reliability import (
     CrawlHeartbeat,
     assert_social_session,
     attach_debugger_chrome,
+    diagnose_social_session,
 )
 
 DEBUGGER_ADDRESS = os.getenv("INSTAGRAM_DEBUGGER_ADDRESS", "127.0.0.1:9224")
@@ -64,6 +65,10 @@ PAGE_LOAD_WAIT_SECONDS = float(os.getenv("INSTAGRAM_PAGE_LOAD_WAIT_SECONDS", "6.
 MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
+# Abort after N consecutive keywords with zero SERP hits (login wall / dead selectors).
+EMPTY_KEYWORD_ABORT = int(os.getenv("INSTAGRAM_SEARCH_EMPTY_ABORT", "5") or "5")
+# Cap merged search backlog so detail never sees multi-thousand queues again.
+SEARCH_PENDING_CAP = int(os.getenv("INSTAGRAM_SEARCH_PENDING_CAP", "400") or "400")
 
 # Smoke 2026-09-11:
 # - No reliable Recent/Latest UI on keyword search
@@ -110,6 +115,8 @@ def main() -> int:
             global_seen: set[str] = set()
             urls_discovered = 0
             urls_new = 0
+            consecutive_empty = 0
+            aborted_empty = False
 
             for index, keyword in enumerate(search_terms, start=1):
                 hb.update("keyword", f"{index}/{len(search_terms)} {keyword!r}")
@@ -121,6 +128,15 @@ def main() -> int:
                     search_result = search_posts_for_keyword(driver, keyword, existing_urls)
                 except Exception as exc:
                     print(f"[instagram-search] skip keyword={keyword} error={exc}", flush=True)
+                    consecutive_empty += 1
+                    if consecutive_empty >= EMPTY_KEYWORD_ABORT:
+                        aborted_empty = True
+                        print(
+                            f"[instagram-search] abort after {consecutive_empty} consecutive "
+                            f"empty/error keywords — check login / SERP selectors",
+                            flush=True,
+                        )
+                        break
                     continue
 
                 stats: KeywordCrawlStats = search_result["stats"]
@@ -128,6 +144,25 @@ def main() -> int:
                 urls = search_result["urls"]
                 urls_discovered += stats.discovered
                 urls_new += len(urls)
+
+                if stats.discovered <= 0 and not urls:
+                    consecutive_empty += 1
+                    wall = diagnose_social_session(driver, "instagram")
+                    if wall:
+                        print(f"[instagram-search] session problem: {wall}", flush=True)
+                        aborted_empty = True
+                        break
+                    if consecutive_empty >= EMPTY_KEYWORD_ABORT:
+                        aborted_empty = True
+                        print(
+                            f"[instagram-search] abort after {consecutive_empty} consecutive "
+                            f"empty SERPs (idle_limit / no anchors) — check login / block",
+                            flush=True,
+                        )
+                        break
+                    continue
+
+                consecutive_empty = 0
 
                 if not urls:
                     continue
@@ -151,6 +186,7 @@ def main() -> int:
             ensure_dir(OUTPUT_FILE.parent)
             existing_results = load_existing_results()
             merged_results = merge_results(existing_results, new_results)
+            merged_results = prune_search_backlog(merged_results, SEARCH_PENDING_CAP)
 
             OUTPUT_FILE.write_text(
                 json.dumps(merged_results, ensure_ascii=False, indent=2),
@@ -169,6 +205,9 @@ def main() -> int:
             print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
             print(f"  - New URLs queued for detail: {urls_new}", flush=True)
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
+            if aborted_empty and urls_discovered <= 0 and urls_new <= 0:
+                print("[instagram-search] FAIL: zero discovery — not a healthy search round", flush=True)
+                return 1
             return 0
         finally:
             hb.stop()
@@ -253,6 +292,13 @@ def search_posts_for_keyword(
                     stop_reason = "max_posts_reached"
                     break
 
+            if page_hits == 0 and scroll_rounds == 1:
+                wall = diagnose_social_session(driver, "instagram")
+                if wall:
+                    print(f"[instagram-search] keyword={keyword} mode={mode} {wall}", flush=True)
+                    stop_reason = "session_blocked"
+                    break
+
             if stop_reason == "max_posts_reached" or mode_full:
                 break
 
@@ -279,7 +325,7 @@ def search_posts_for_keyword(
             scroll_search_results(driver)
             time.sleep(SCROLL_PAUSE_SECONDS)
 
-        if stop_reason in {"keyword_runtime_limit", "runtime_limit", "max_posts_reached"}:
+        if stop_reason in {"keyword_runtime_limit", "runtime_limit", "max_posts_reached", "session_blocked"}:
             break
         if stop_reason.endswith("_duplicates_only") or stop_reason.endswith("_budget_reached") or stop_reason == "idle_limit":
             continue
@@ -388,6 +434,26 @@ def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
     return sorted(by_url.values(), key=lambda x: x.get("url", ""))
 
 
+def prune_search_backlog(results: list[dict], pending_cap: int) -> list[dict]:
+    """Keep all done rows; cap pending_detail=true so detail queue stays bounded."""
+    if pending_cap <= 0:
+        return results
+    pending = [r for r in results if isinstance(r, dict) and r.get("pending_detail", True)]
+    done = [r for r in results if isinstance(r, dict) and r.get("pending_detail") is False]
+    other = [r for r in results if not isinstance(r, dict)]
+    if len(pending) <= pending_cap:
+        return results
+    # Prefer most recently merged pending (tail); drop oldest pending overflow.
+    kept_pending = pending[-pending_cap:]
+    dropped = len(pending) - len(kept_pending)
+    print(
+        f"[instagram-search] prune pending backlog {len(pending)} → {len(kept_pending)} "
+        f"(dropped {dropped})",
+        flush=True,
+    )
+    return done + kept_pending + other
+
+
 def instagram_chrome_profile_dir() -> Path:
     return PROJECT_ROOT / "runtime" / "chrome" / "instagram"
 
@@ -460,9 +526,30 @@ def get_anchor_hrefs(driver: webdriver.Chrome) -> list[str]:
     try:
         hrefs = driver.execute_script(
             """
-            return Array.from(document.querySelectorAll('a'))
-              .map((anchor) => anchor.href || '')
-              .filter(Boolean);
+            const out = new Set();
+            const push = (raw) => {
+              if (!raw) return;
+              try {
+                const abs = new URL(raw, location.origin).href;
+                if (/instagram\\.com\\/(?:p|reel|reels)\\//i.test(abs)) out.add(abs);
+              } catch (e) {}
+            };
+            for (const a of document.querySelectorAll('a[href*="/p/"], a[href*="/reel"], a[href*="/reels/"]')) {
+              push(a.getAttribute('href') || a.href || '');
+            }
+            // Fallback: any anchor href (older DOM)
+            for (const a of document.querySelectorAll('a[href]')) {
+              push(a.getAttribute('href') || a.href || '');
+            }
+            // Shortcodes embedded in page JSON
+            const html = document.documentElement ? document.documentElement.innerHTML : '';
+            const re = /"code"\\s*:\\s*"([A-Za-z0-9_-]{5,})"|\\/(?:p|reel|reels)\\/([A-Za-z0-9_-]{5,})\\//g;
+            let m;
+            while ((m = re.exec(html)) !== null) {
+              const code = m[1] || m[2];
+              if (code) out.add(`https://www.instagram.com/p/${code}/`);
+            }
+            return Array.from(out);
             """
         )
     except WebDriverException:

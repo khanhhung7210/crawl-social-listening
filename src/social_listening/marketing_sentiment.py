@@ -35,8 +35,15 @@ NEG_WORDS: list[str] = [
     "loi",
     "thất vọng",
     "that vong",
-    "kém",
-    "kem",
+    # Avoid bare "kem" — normalizes the same as color "kem" (nâu kem) and false-negatives.
+    "kém chất",
+    "kem chat",
+    "quá kém",
+    "qua kem",
+    "kém quá",
+    "kem qua",
+    "rất kém",
+    "rat kem",
     "chán",
     "chan",
 ]
@@ -171,8 +178,24 @@ def _clause_sentiment(clause: str) -> str:
     return "neutral"
 
 
-def detect_sentiment(text: str) -> str:
-    """Return positive | negative | neutral for marketing mention text."""
+def detect_sentiment(text: str, rating: float | int | None = None) -> str:
+    """Return positive | negative | neutral for marketing mention text.
+
+    When a star rating is present (Google Maps / app stores), prefer it over
+    keyword heuristics — star score is the author's explicit verdict.
+    """
+    if rating is not None:
+        try:
+            stars = float(rating)
+        except (TypeError, ValueError):
+            stars = None
+        if stars is not None:
+            if stars >= 4:
+                return "positive"
+            if stars <= 2:
+                return "negative"
+            # 3★ — fall through to text
+
     clauses = split_clauses(text)
     labels = [_clause_sentiment(c) for c in clauses]
 

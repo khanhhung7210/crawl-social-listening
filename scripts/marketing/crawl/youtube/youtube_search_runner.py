@@ -570,6 +570,10 @@ def ensure_youtube_debug_chrome() -> None:
 def build_driver() -> webdriver.Chrome:
     ensure_youtube_debug_chrome()
     print(f"[youtube-search] attaching Chrome at {DEBUGGER_ADDRESS}…", flush=True)
+    # Clear wedged YouTube tabs before Selenium handshake (common after captcha).
+    from social_listening.crawl_reliability import recover_stuck_debug_chrome
+
+    recover_stuck_debug_chrome(DEBUGGER_ADDRESS)
     driver = attach_debugger_chrome(DEBUGGER_ADDRESS)
     assert_social_session(driver, "youtube")
     return driver
