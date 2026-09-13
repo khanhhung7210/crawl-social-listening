@@ -302,6 +302,8 @@ def main() -> int:
     log("=" * 60)
 
     round_no = 0
+    fail_streak = 0
+    alert_dir = PROJECT_ROOT / "logs" / "continuous-alerts"
     try:
         while True:
             round_no += 1
@@ -310,17 +312,59 @@ def main() -> int:
                 run_news_and_apps(args)
             if do_enrich:
                 run_enrich_for_ui(args)
+            mxh_code = 0
             if run_mxh:
-                run_mxh_round(args.platform, args)
-                if do_enrich:
+                mxh_code = run_mxh_round(args.platform, args)
+                if do_enrich and mxh_code == 0:
                     run_enrich_for_ui(args)
 
             if args.max_rounds and round_no >= args.max_rounds:
                 log(f"Reached --max-rounds={args.max_rounds}, stopping")
                 return 0
 
-            log(f"Sleep {args.sleep}s before next round…")
-            time.sleep(max(0, args.sleep))
+            sleep_s = max(0, int(args.sleep))
+            if run_mxh and mxh_code != 0:
+                fail_streak += 1
+                # Exponential backoff so attach/captcha death spirals do not
+                # burn a round every 3 minutes. Cap 30 minutes.
+                sleep_s = min(1800, max(sleep_s, sleep_s * (2 ** min(fail_streak, 4))))
+                try:
+                    alert_dir.mkdir(parents=True, exist_ok=True)
+                    alert_path = alert_dir / f"{args.platform}.alert"
+                    alert_path.write_text(
+                        f"ts={datetime.now().isoformat()}\n"
+                        f"platform={args.platform}\n"
+                        f"round={round_no}\n"
+                        f"exit={mxh_code}\n"
+                        f"fail_streak={fail_streak}\n"
+                        f"next_sleep_s={sleep_s}\n"
+                        "hint=Chrome attach timeout / captcha / login — "
+                        "refresh tab or re-login on this platform's debug port\n",
+                        encoding="utf-8",
+                    )
+                    log(
+                        f"ALERT platform={args.platform} exit={mxh_code} "
+                        f"streak={fail_streak} → {alert_path}"
+                    )
+                except OSError as exc:
+                    log(f"ALERT write failed: {exc}")
+                log(
+                    f"Crawl failed — backoff sleep {sleep_s}s "
+                    f"(streak={fail_streak}) before next round…"
+                )
+            else:
+                if fail_streak:
+                    log(f"Recovered after fail_streak={fail_streak}")
+                fail_streak = 0
+                # Clear stale alert on success
+                try:
+                    alert_path = alert_dir / f"{args.platform}.alert"
+                    if alert_path.exists():
+                        alert_path.unlink()
+                except OSError:
+                    pass
+                log(f"Sleep {sleep_s}s before next round…")
+            time.sleep(sleep_s)
     except KeyboardInterrupt:
         log("Stopped by Ctrl+C")
         return 0

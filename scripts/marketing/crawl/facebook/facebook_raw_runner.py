@@ -933,12 +933,39 @@ def crawl_post(driver: webdriver.Chrome, post_url: str) -> dict:
     }
 
     attach_freshness_fields(post, created_time, POLICY)
-    # Skip expensive comment pagination for validated-stale posts; keep the row.
-    if not should_spend_on_comments(str(post.get("freshness") or "unknown")):
+    freshness = str(post.get("freshness") or "unknown")
+    ui_comment_count = engagement.get("comment_count")
+    try:
+        ui_comment_n = int(ui_comment_count) if ui_comment_count is not None else 0
+    except (TypeError, ValueError):
+        ui_comment_n = 0
+
+    # Skip expensive comment pagination for validated-stale posts — unless the
+    # UI already shows comments (overnight gap: count saved, bodies missing).
+    spend_comments = should_spend_on_comments(freshness) or ui_comment_n > 0
+    if not spend_comments:
         return post
 
     if MAX_COMMENTS != 0:
         comments = extract_comments(driver, canonical_url)[:comment_limit()]
+        # One recovery pass when UI claims comments but extract returned none
+        # (photo viewer / collapsed thread / filter not on All comments).
+        if ui_comment_n > 0 and not comments:
+            print(
+                f"[facebook-comments] retry empty extract "
+                f"ui_comment_count={ui_comment_n} url={canonical_url}",
+                flush=True,
+            )
+            ensure_post_detail_context(driver)
+            click_open_comments_entrypoint(driver)
+            time.sleep(POST_LOAD_WAIT_SECONDS)
+            comments = extract_comments(driver, canonical_url)[:comment_limit()]
+            if not comments:
+                print(
+                    f"[facebook-comments] still empty after retry "
+                    f"ui_comment_count={ui_comment_n} url={canonical_url}",
+                    flush=True,
+                )
         post["comments"]["data"] = comments
         post["comments_crawled"] = len(comments)
         # comments_found = actually loaded nodes, not the UI comment_count claim

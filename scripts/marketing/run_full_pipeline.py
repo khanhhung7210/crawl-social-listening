@@ -299,9 +299,17 @@ class PipelineRunner:
         return False
 
     def run_pipeline(self) -> bool:
-        """Run the complete pipeline for this platform"""
+        """Run the complete pipeline for this platform.
+
+        --continue-on-error keeps later stages running after a failure, but the
+        pipeline still returns False if any stage failed (so continuous can backoff).
+        When a Selenium *runner* crawl fails, skip format/filter/import so we do
+        not re-upsert stale files and pretend the round succeeded.
+        """
         self.log(f"Starting pipeline for {self.config['name']}", "INFO")
         self.log("=" * 60, "INFO")
+
+        crawl_runner_failed = False
 
         for step in self.config.get("steps") or []:
             stage = str(step.get("stage") or "crawl")
@@ -312,6 +320,17 @@ class PipelineRunner:
                 self.log(f"Skipping {script} ({stage})", "SKIP")
                 self.stats["skipped"].append(script)
                 continue
+
+            script_name = Path(script).name.lower()
+            if crawl_runner_failed and stage in {"format", "filter"}:
+                self.log(
+                    f"Skipping {script_name} — crawl runner failed earlier "
+                    "(avoid reprocessing stale data)",
+                    "SKIP",
+                )
+                self.stats["skipped"].append(script_name)
+                continue
+
             label = f"{stage.title()} — {Path(script).name}"
             extra_args = list(step.get("extra_args") or [])
             if script.endswith("facebook_raw_runner.py"):
@@ -331,12 +350,23 @@ class PipelineRunner:
                         if "--flush-import" not in extra_args and "--no-flush-import" not in extra_args:
                             extra_args.append("--flush-import")
             if not self.run_command(script, label, extra_args=extra_args or None):
+                if stage == "crawl" and script_name.endswith("_runner.py"):
+                    crawl_runner_failed = True
                 if not self.args.continue_on_error:
                     return False
 
         if self.args.only_crawl:
             self.log("Stopping after crawl stage (--only-crawl)", "INFO")
-            return True
+            return not self.stats["failed"]
+
+        if crawl_runner_failed:
+            self.log(
+                "Skipping PostgreSQL Import — crawl runner failed "
+                "(no fresh data this round)",
+                "SKIP",
+            )
+            self.stats["skipped"].append("PostgreSQL Import")
+            return False
 
         if not self.args.skip_sync and self.config.get("postgres_import"):
             import_args = list(self.config.get("import_args") or [])
@@ -348,7 +378,7 @@ class PipelineRunner:
                 if not self.args.continue_on_error:
                     return False
 
-        return True
+        return not self.stats["failed"]
 
     def print_summary(self):
         """Print pipeline execution summary"""

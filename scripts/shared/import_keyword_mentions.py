@@ -197,19 +197,30 @@ def find_mention_files(root: Path, film: str | None = None) -> list[Path]:
     root_resolved = root.resolve()
     seen: set[Path] = set()
     out: list[Path] = []
+    skipped_junk = 0
     for p in paths:
         rp = p.resolve()
         if rp in seen:
             continue
+        parts_lower = [part.lower() for part in rp.parts]
+        # Junk mirror: .../data/data/<platform>/...
+        if "data" in parts_lower:
+            idx = parts_lower.index("data")
+            if idx + 1 < len(parts_lower) and parts_lower[idx + 1] == "data":
+                skipped_junk += 1
+                continue
         try:
             rel = rp.relative_to(root_resolved)
         except ValueError:
             rel = None
         if rel is not None and rel.parts and rel.parts[0].lower() == "data":
-            # e.g. <repo>/data/data/youtube/... — junk mirror, not real crawl output
+            # e.g. <repo>/data/data/youtube/... when root is <repo>/data
+            skipped_junk += 1
             continue
         seen.add(rp)
         out.append(p)
+    if skipped_junk:
+        print(f"Skipped {skipped_junk} nested data/data mention file(s)")
     if film:
         slug = film.strip().lower().replace(" ", "_")
         out = [p for p in out if slug in {part.lower() for part in p.parts}]

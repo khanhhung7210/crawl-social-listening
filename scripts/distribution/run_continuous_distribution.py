@@ -147,6 +147,8 @@ def main() -> int:
             log("seed_films OK")
 
     round_no = 0
+    fail_streak = 0
+    alert_dir = PROJECT_ROOT / "logs" / "continuous-alerts"
     try:
         while True:
             round_no += 1
@@ -176,9 +178,10 @@ def main() -> int:
                 cwd=str(PROJECT_ROOT),
                 env=env_python(args.platform),
             )
-            log(f"Round {round_no} exit={result.returncode}")
+            round_code = int(result.returncode or 0)
+            log(f"Round {round_no} exit={round_code}")
 
-            if do_import:
+            if do_import and round_code == 0:
                 # Intent trên comment (WOM / khen-chê) + metrics lại sau classify
                 classify_cmd = [sys.executable, str(CLASSIFY), "--reclassify"]
                 if args.film and not args.all_active:
@@ -205,8 +208,39 @@ def main() -> int:
                 log("Stop file detected — exit after this round")
                 return 0
 
-            log(f"Sleep {args.sleep}s…")
-            time.sleep(max(0, args.sleep))
+            sleep_s = max(0, int(args.sleep))
+            if round_code != 0:
+                fail_streak += 1
+                sleep_s = min(1800, max(sleep_s, sleep_s * (2 ** min(fail_streak, 4))))
+                try:
+                    alert_dir.mkdir(parents=True, exist_ok=True)
+                    alert_path = alert_dir / f"dis_{args.platform}.alert"
+                    alert_path.write_text(
+                        f"ts={datetime.now().isoformat()}\n"
+                        f"platform={args.platform}\n"
+                        f"round={round_no}\n"
+                        f"exit={round_code}\n"
+                        f"fail_streak={fail_streak}\n"
+                        f"next_sleep_s={sleep_s}\n",
+                        encoding="utf-8",
+                    )
+                    log(
+                        f"ALERT DIS platform={args.platform} exit={round_code} "
+                        f"streak={fail_streak} → {alert_path}"
+                    )
+                except OSError as exc:
+                    log(f"ALERT write failed: {exc}")
+                log(f"Crawl failed — backoff sleep {sleep_s}s…")
+            else:
+                fail_streak = 0
+                try:
+                    alert_path = alert_dir / f"dis_{args.platform}.alert"
+                    if alert_path.exists():
+                        alert_path.unlink()
+                except OSError:
+                    pass
+                log(f"Sleep {sleep_s}s…")
+            time.sleep(sleep_s)
     except KeyboardInterrupt:
         log("Stopped by Ctrl+C")
         return 0

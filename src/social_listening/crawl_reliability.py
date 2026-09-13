@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import subprocess
+import sys
 import threading
 import time
 from typing import Callable
@@ -20,6 +22,72 @@ def chrome_attach_timeout_seconds() -> float:
     return float(os.getenv("CHROME_ATTACH_TIMEOUT_SECONDS", "90") or "90")
 
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0") or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def kill_orphaned_chromedrivers(*, parent_pid: int | None = None) -> int:
+    """
+    Kill chromedriver processes that are children of *parent_pid* (default: us).
+
+    Attach timeouts often leave a hung chromedriver holding the DevTools port,
+    so the next round fails the same way. Only children of this process are
+    targeted so parallel platform terminals are not wiped.
+    """
+    if not _env_flag("CHROME_ATTACH_KILL_ORPHAN_DRIVER", True):
+        return 0
+    parent = int(parent_pid or os.getpid())
+    killed = 0
+    try:
+        if sys.platform == "win32":
+            # ParentProcessId match keeps other platforms' drivers alive.
+            ps = (
+                "$ppid=%d; $n=0; "
+                "Get-CimInstance Win32_Process -Filter \"Name='chromedriver.exe'\" "
+                "| Where-Object { $_.ParentProcessId -eq $ppid } "
+                "| ForEach-Object { "
+                "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }; "
+                "Write-Output $n"
+            ) % parent
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            out = (result.stdout or "").strip().splitlines()
+            if out and out[-1].isdigit():
+                killed = int(out[-1])
+        else:
+            result = subprocess.run(
+                ["pgrep", "-P", str(parent), "-f", "chromedriver"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            pids = [int(x) for x in (result.stdout or "").split() if x.strip().isdigit()]
+            for pid in pids:
+                try:
+                    os.kill(pid, 9)
+                    killed += 1
+                except OSError:
+                    pass
+    except Exception as exc:
+        print(f"[chrome] orphan chromedriver cleanup skipped: {exc}", flush=True)
+        return 0
+    if killed:
+        print(
+            f"[chrome] killed {killed} orphan chromedriver child(ren) of pid={parent}",
+            flush=True,
+        )
+    return killed
+
+
 def attach_debugger_chrome(
     address: str,
     *,
@@ -32,6 +100,10 @@ def attach_debugger_chrome(
     Without this, webdriver.Chrome(debugger_address=...) can hang for hours
     when the port answers /json/version but DevTools handshake stalls
     (common when MKT+DIS fight the same browser, or Chrome is mid-navigation).
+
+    On timeout: do not wait for the hung worker thread (would block forever),
+    and kill orphan chromedriver children of this process so the next round
+    can attach again without a manual kill.
     """
     addr = (address or "").strip()
     if not addr:
@@ -64,21 +136,30 @@ def attach_debugger_chrome(
                 return webdriver.Chrome(service=Service(driver_path), options=options)
             return webdriver.Chrome(options=options)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_connect)
+    # Do NOT use `with ThreadPoolExecutor` — on timeout, __exit__ waits for the
+    # hung connect thread and can leave an orphan chromedriver after success.
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(_connect)
+    try:
         try:
             driver = fut.result(timeout=limit)
         except concurrent.futures.TimeoutError as exc:
+            fut.cancel()
+            kill_orphaned_chromedrivers()
             raise RuntimeError(
                 f"Selenium attach to {addr} timed out after {limit:.0f}s — "
                 "Chrome may be stuck, captcha, or another crawler holds the session. "
-                "Fix: refresh the tab, re-login, kill orphan run_full_pipeline, retry."
+                "Orphan chromedriver children were killed; refresh the YouTube/social "
+                "tab if the next round still fails."
             ) from exc
         except SessionNotCreatedException as exc:
+            kill_orphaned_chromedrivers()
             raise RuntimeError(
                 f"Cannot attach Selenium to Chrome at {addr}. "
                 f"Check: curl http://{addr}/json/version"
             ) from exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     print(f"[chrome] attached OK {addr}", flush=True)
     return driver
@@ -117,6 +198,9 @@ def diagnose_social_session(driver: webdriver.Chrome, platform: str) -> str | No
         "verify",
         "unusual traffic",
         "auth_platform",
+        "recaptcha",
+        "i'm not a robot",
+        "không phải robot",
     )
     if any(tok in blob for tok in login_tokens):
         return f"{plat} session blocked/login wall: url={url!r} title={title!r}"
