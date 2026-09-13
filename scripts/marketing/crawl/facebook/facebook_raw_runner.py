@@ -105,6 +105,10 @@ COMMENT_LOAD_ROUNDS = POLICY.max_comment_scroll_rounds
 COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
 COMMENT_LOAD_PAUSE_SECONDS = float(os.getenv("FACEBOOK_COMMENT_LOAD_PAUSE_SECONDS", "1.75"))
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
+# Finish brand/keyword loops before PIPELINE_CRAWL_STAGE_TIMEOUT (default 1800).
+RUN_MAX_RUNTIME_SECONDS = int(os.getenv("FACEBOOK_RUN_MAX_RUNTIME_SECONDS", "1500") or "1500")
+# Skip brand flush if remaining run budget is below this (flush can take minutes).
+FLUSH_MIN_REMAINING_SECONDS = int(os.getenv("FACEBOOK_FLUSH_MIN_REMAINING_SECONDS", "180") or "180")
 DEBUG_COMMENT_LOADING = str(os.getenv("FACEBOOK_DEBUG_COMMENTS", "")).strip().lower() in {"1", "true", "yes", "on"}
 FORCE_RECrawl = str(os.getenv("FACEBOOK_FORCE_RECrawl", "")).strip().lower() in {"1", "true", "yes", "on"}
 CRAWL_TIME_REJECT_WINDOW_SECONDS = int(os.getenv("FACEBOOK_CRAWL_TIME_REJECT_WINDOW_SECONDS", "900"))
@@ -267,11 +271,13 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
             f"[facebook-search] Policy lookback={POLICY.lookback_days:.1f}d "
             f"discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} scroll={MAX_SCROLL_ROUNDS} "
             f"keyword_runtime={KEYWORD_RUNTIME_SECONDS}s "
+            f"run_budget={RUN_MAX_RUNTIME_SECONDS}s "
             f"max_stale_details={POLICY.max_stale_details_per_keyword}"
         )
         print(
             "[facebook-search] Note: open search with filters=recent_posts URL first; "
-            "UI Recent click is backup only; stale posts kept with freshness tag (comments skipped)"
+            "UI Recent click is backup only; stale posts kept with freshness tag (comments skipped); "
+            "self-stop before pipeline 1800s kill"
         )
 
         run_id = state.start_run("facebook", run_type)
@@ -289,13 +295,33 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
             total_urls_skipped = 0
             total_stale = 0
             keyword_index = 0
+            stopped_for_runtime = False
+            run_started = time.monotonic()
 
             for brand, brand_terms in brand_groups:
+                if time.monotonic() - run_started >= RUN_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[facebook-search] stop early: run_runtime_limit "
+                        f"({RUN_MAX_RUNTIME_SECONDS}s) before brand={brand}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 print(
                     f"[facebook-search] === brand={brand} keywords={len(brand_terms)} ===",
                     flush=True,
                 )
                 for keyword in brand_terms:
+                    if time.monotonic() - run_started >= RUN_MAX_RUNTIME_SECONDS:
+                        print(
+                            f"[facebook-search] stop early: run_runtime_limit "
+                            f"({RUN_MAX_RUNTIME_SECONDS}s) at keyword {keyword_index}/{len(ordered_terms)}",
+                            flush=True,
+                        )
+                        stopped_for_runtime = True
+                        break
+
                     keyword_index += 1
                     safe_keyword = sanitize_filename(keyword) or f"keyword_{keyword_index}"
                     file_path = output_dir / f"search_{safe_keyword}.jsonl"
@@ -341,6 +367,10 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
                     stale_details = 0
                     detail_budget = min(len(keyword_urls), MAX_POSTS_PER_KEYWORD)
                     for url_index, url in enumerate(keyword_urls[:detail_budget], start=1):
+                        if time.monotonic() - run_started >= RUN_MAX_RUNTIME_SECONDS:
+                            stats.stop_reason = "run_runtime_limit"
+                            stopped_for_runtime = True
+                            break
                         if time.monotonic() - keyword_started >= KEYWORD_RUNTIME_SECONDS:
                             stats.stop_reason = "keyword_runtime_limit"
                             break
@@ -406,8 +436,26 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
                     stats.log("facebook-search")
                     processed_keywords += 1
 
+                    if stopped_for_runtime:
+                        break
+
+                if stopped_for_runtime:
+                    # Still flush whatever this brand already wrote if enough wall time left.
+                    remaining = RUN_MAX_RUNTIME_SECONDS - (time.monotonic() - run_started)
+                    if do_flush_brand and remaining >= FLUSH_MIN_REMAINING_SECONDS:
+                        flush_brand_pipeline(brand, do_import=do_flush_import)
+                    break
+
                 if do_flush_brand:
-                    flush_brand_pipeline(brand, do_import=do_flush_import)
+                    remaining = RUN_MAX_RUNTIME_SECONDS - (time.monotonic() - run_started)
+                    if remaining < FLUSH_MIN_REMAINING_SECONDS:
+                        print(
+                            f"[facebook-search] skip flush brand={brand}: "
+                            f"remaining={remaining:.0f}s < {FLUSH_MIN_REMAINING_SECONDS}s",
+                            flush=True,
+                        )
+                    else:
+                        flush_brand_pipeline(brand, do_import=do_flush_import)
 
             # Complete run tracking
             state.complete_run(
@@ -427,6 +475,11 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
             print(f"  - Stale details skipped: {total_stale}")
             print(f"  - URLs skipped (already had): {total_urls_skipped}")
             print(f"  - Total URLs in state: {len(existing_urls)}")
+            if stopped_for_runtime:
+                print(
+                    "[facebook-search] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             driver.quit()

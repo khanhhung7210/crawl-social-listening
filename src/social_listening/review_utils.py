@@ -189,6 +189,47 @@ def clean_google_maps_place_title(value: object) -> str:
     return title
 
 
+_GENERIC_PLACE_TITLES = frozenset(
+    {
+        "galaxy cinema",
+        "galaxy",
+        "galaxy cine",
+        "cgv",
+        "cgv cinemas",
+        "lotte cinema",
+        "lotte",
+        "bhd star",
+        "bhd",
+        "beta cinemas",
+        "beta",
+        "cinestar",
+    }
+)
+
+
+def is_generic_cinema_place_title(value: object) -> bool:
+    return compact_whitespace(value).casefold() in _GENERIC_PLACE_TITLES
+
+
+def resolve_google_maps_place_display_name(
+    *,
+    title: object = "",
+    search_keyword: object = "",
+    address: object = "",
+) -> str:
+    """Prefer Maps title when specific; else search keyword / address (Aeon Huế…)."""
+    cleaned = clean_google_maps_place_title(title)
+    if cleaned and not is_generic_cinema_place_title(cleaned):
+        return cleaned
+    keyword = compact_whitespace(search_keyword)
+    if keyword and not is_generic_cinema_place_title(keyword):
+        return keyword
+    addr = compact_whitespace(address)
+    if addr and not is_google_maps_ui_junk(addr):
+        return addr
+    return cleaned or keyword or ""
+
+
 def clean_google_maps_author(value: object) -> str:
     author = _MAPS_ICON_RE.sub("", compact_whitespace(value))
     author = re.split(r"(?i)local\s+guide", author, maxsplit=1)[0]

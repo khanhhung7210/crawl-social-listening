@@ -56,6 +56,14 @@ COMMENT_IDLE_ROUNDS_BEFORE_STOP = POLICY.comment_idle_rounds_before_stop
 MAX_COMMENT_SCROLL_ROUNDS = POLICY.max_comment_scroll_rounds
 COMMENT_SCROLL_PAUSE_SECONDS = 1.5
 MAX_COMMENTS = POLICY.max_comments
+DETAIL_KEYWORD_RUNTIME_SECONDS = int(
+    os.getenv("YOUTUBE_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
+    or str(POLICY.keyword_runtime_seconds)
+)
+DETAIL_MAX_URLS = int(os.getenv("YOUTUBE_DETAIL_MAX_URLS", str(max(FINAL_LIMIT, 80))) or "80")
+DETAIL_MAX_RUNTIME_SECONDS = int(
+    os.getenv("YOUTUBE_DETAIL_MAX_RUNTIME_SECONDS", "1500") or "1500"
+)
 
 
 def main() -> int:
@@ -74,8 +82,8 @@ def main() -> int:
     print(f"using youtube input file: {input_file}")
 
     records = load_existing_records(OUTPUT_FILE)
-    existing_urls = collect_existing_video_urls(records)
-    pending_urls = [item for item in video_urls if item["url"] not in existing_urls]
+    existing_urls = collect_completed_video_urls(records)
+    pending_urls = select_pending_urls(video_urls, existing_urls, DETAIL_MAX_URLS)
     if not pending_urls:
         print(f"no pending videos; {len(records)} records already saved in {OUTPUT_FILE.resolve()}")
         return 0
@@ -84,9 +92,17 @@ def main() -> int:
         run_id = state.start_run("youtube_detail", "incremental")
         urls_crawled = 0
         urls_skipped = len(existing_urls)
+        run_started = time.monotonic()
+        stopped_for_runtime = False
+        started_by_keyword: dict[str, float] = {}
+        detailed_urls: set[str] = set()
 
-        print(f"[youtube-detail] URLs to crawl: {len(pending_urls)}")
-        print(f"[youtube-detail] URLs skipped: {urls_skipped}")
+        print(f"[youtube-detail] URLs to crawl this round: {len(pending_urls)} (cap={DETAIL_MAX_URLS})")
+        print(f"[youtube-detail] URLs skipped (already done): {urls_skipped}")
+        print(
+            f"[youtube-detail] Runtime budget={DETAIL_MAX_RUNTIME_SECONDS}s "
+            f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+        )
         print(
             f"[youtube-detail] Policy discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
             f"lookback={POLICY.lookback_days:.1f}d"
@@ -97,13 +113,33 @@ def main() -> int:
             keyword_batches: dict[str, list[dict]] = {}
             total = len(pending_urls)
             for index, item in enumerate(pending_urls, start=1):
+                if time.monotonic() - run_started >= DETAIL_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[youtube-detail] stop early: detail_runtime_limit "
+                        f"({DETAIL_MAX_RUNTIME_SECONDS}s) at {index - 1}/{total}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 url = item["url"]
                 keyword = item["keyword"]
+                started_by_keyword.setdefault(keyword, time.monotonic())
+                if time.monotonic() - started_by_keyword[keyword] >= DETAIL_KEYWORD_RUNTIME_SECONDS:
+                    print(f"[youtube-detail] skip remaining for keyword={keyword}: keyword_runtime_limit")
+                    continue
+
                 try:
                     record = crawl_video(driver, url, keyword, search_terms)
                     content_timestamp = record.get("published_at") or record.get("created_time")
-                    state.mark_crawled(url, "youtube", keyword, content_timestamp)
-                    state.mark_crawled(url, "youtube_detail", keyword, content_timestamp)
+                    if content_timestamp:
+                        state.mark_crawled(url, "youtube", keyword, content_timestamp)
+                        state.mark_crawled(url, "youtube_detail", keyword, content_timestamp)
+                    else:
+                        print(
+                            f"[youtube-detail] no published_at for {url} — not marking crawled",
+                            flush=True,
+                        )
                 except Exception as exc:
                     record = {
                         "keyword": keyword,
@@ -113,6 +149,7 @@ def main() -> int:
                         "freshness": "unknown",
                     }
                 keyword_batches.setdefault(keyword, []).append(record)
+                detailed_urls.add(url)
                 print(f"[{index}/{total}] detailed {url}")
 
             for keyword, batch in keyword_batches.items():
@@ -132,8 +169,10 @@ def main() -> int:
                         record["coverage"] = False
                     if in_final and not record.get("error") and record.get("freshness") != "stale":
                         urls_crawled += 1
-                    records.append(record)
+                    records = merge_record(records, record)
                 save_records(OUTPUT_FILE, records)
+
+            mark_search_results_detailed(input_file, detailed_urls)
 
             state.complete_run(
                 run_id,
@@ -144,6 +183,11 @@ def main() -> int:
             )
 
             print(f"saved {len(records)} total youtube payloads to {OUTPUT_FILE.resolve()}")
+            if stopped_for_runtime:
+                print(
+                    "[youtube-detail] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             leave_chrome_open(driver)
@@ -174,9 +218,51 @@ def load_video_urls(path: Path) -> list[dict]:
         url = normalize_youtube_video_url(str(item.get("url") or "").strip())
         if not url or url in seen:
             continue
+        if item.get("pending_detail") is False:
+            continue
         seen.add(url)
-        urls.append({"keyword": str(item.get("keyword") or "").strip(), "url": url})
+        urls.append(
+            {
+                "keyword": str(item.get("keyword") or "").strip(),
+                "url": url,
+                "pending_detail": bool(item.get("pending_detail", True)),
+            }
+        )
     return urls
+
+
+def select_pending_urls(
+    video_urls: list[dict],
+    completed_urls: set[str],
+    limit: int,
+) -> list[dict]:
+    pending = [item for item in video_urls if item["url"] not in completed_urls]
+    if limit <= 0 or len(pending) <= limit:
+        return pending
+    flagged = [i for i in pending if i.get("pending_detail", True)]
+    pool = flagged or pending
+    return list(reversed(pool))[:limit]
+
+
+def mark_search_results_detailed(path: Path, done_urls: set[str]) -> None:
+    if not done_urls or not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, list):
+        return
+    changed = False
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        url = normalize_youtube_video_url(str(item.get("url") or ""))
+        if url and url in done_urls and item.get("pending_detail", True):
+            item["pending_detail"] = False
+            changed = True
+    if changed:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_existing_records(path: Path) -> list[dict]:
@@ -191,16 +277,67 @@ def load_existing_records(path: Path) -> list[dict]:
     return [item for item in payload if isinstance(item, dict)]
 
 
-def collect_existing_video_urls(records: list[dict]) -> set[str]:
+def collect_completed_video_urls(records: list[dict]) -> set[str]:
     urls: set[str] = set()
     for item in records:
         if not isinstance(item, dict):
+            continue
+        if should_retry_record(item):
             continue
         for raw_url in (item.get("current_url"), item.get("url")):
             url = normalize_youtube_video_url(str(raw_url or "").strip())
             if url:
                 urls.add(url)
     return urls
+
+
+def should_retry_record(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return True
+    if item.get("stale") or item.get("freshness") == "stale" or item.get("coverage") is False:
+        return False
+    if not (item.get("created_time") or item.get("published_at")):
+        return True
+    if item.get("error"):
+        return True
+    return False
+
+
+def merge_record(records: list[dict], new_record: dict) -> list[dict]:
+    normalized_target = ""
+    for raw_url in (new_record.get("current_url"), new_record.get("url")):
+        normalized_target = normalize_youtube_video_url(str(raw_url or "").strip())
+        if normalized_target:
+            break
+
+    if not normalized_target:
+        return [*records, new_record]
+
+    merged: list[dict] = []
+    replaced = False
+    for item in records:
+        if not isinstance(item, dict):
+            merged.append(item)
+            continue
+        normalized_existing = ""
+        for raw_url in (item.get("current_url"), item.get("url")):
+            normalized_existing = normalize_youtube_video_url(str(raw_url or "").strip())
+            if normalized_existing:
+                break
+        if normalized_existing == normalized_target:
+            if not replaced:
+                merged.append(new_record)
+                replaced = True
+            continue
+        merged.append(item)
+
+    if not replaced:
+        merged.append(new_record)
+    return merged
+
+
+def collect_existing_video_urls(records: list[dict]) -> set[str]:
+    return collect_completed_video_urls(records)
 
 
 def save_records(path: Path, records: list[dict]) -> None:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Seed listening_queries, cinemas, and alert_rules from JSON files into Postgres.
+"""Seed cinemas / alert_rules (and optional brand queries) into Postgres.
 
-Run once (or with --force to refresh):
+Brand keywords are managed in Dashboard → Settings (listening_queries).
+Optional legacy bootstrap: if data/shared/social_keywords.json still exists,
+--force can re-seed brand queries from that file.
 
   PYTHONPATH=src python3 scripts/shared/seed_listening_config.py
   PYTHONPATH=src python3 scripts/shared/seed_listening_config.py --force
@@ -191,11 +193,13 @@ def seed_cinemas(cur, brand_ids: dict[str, str], force: bool) -> None:
         return
 
     inserted = updated = 0
+    kept_slugs: list[str] = []
     for name in cinemas:
         query = str(name).strip()
         if not query:
             continue
         slug = slugify(query)
+        kept_slugs.append(slug)
         meta = json.dumps({"google_maps_query": query}, ensure_ascii=False)
         cur.execute(
             """
@@ -226,7 +230,33 @@ def seed_cinemas(cur, brand_ids: dict[str, str], force: bool) -> None:
         )
         inserted += 1
 
-    print(f"  cinemas: inserted={inserted} updated={updated}")
+    deleted = 0
+    if force and kept_slugs:
+        cur.execute(
+            """
+            SELECT cinema_id FROM cinemas
+            WHERE brand_id = %s::uuid
+              AND cinema_slug <> ALL(%s::text[])
+            """,
+            (glx_id, kept_slugs),
+        )
+        stale_ids = [row[0] for row in cur.fetchall()]
+        if stale_ids:
+            cur.execute(
+                "UPDATE posts SET cinema_id = NULL WHERE cinema_id = ANY(%s::uuid[])",
+                (stale_ids,),
+            )
+            cur.execute(
+                "UPDATE mentions SET cinema_id = NULL WHERE cinema_id = ANY(%s::uuid[])",
+                (stale_ids,),
+            )
+            cur.execute(
+                "DELETE FROM cinemas WHERE cinema_id = ANY(%s::uuid[])",
+                (stale_ids,),
+            )
+            deleted = len(stale_ids)
+
+    print(f"  cinemas: inserted={inserted} updated={updated} deleted={deleted}")
 
 
 def seed_exclude_rules(cur, force: bool) -> None:
@@ -341,18 +371,23 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="Overwrite existing rows")
     args = parser.parse_args()
 
-    if not KEYWORD_FILE.exists():
-        print(f"Missing {KEYWORD_FILE}")
-        return 1
+    payload: dict | None = None
+    if KEYWORD_FILE.exists():
+        payload = json.loads(KEYWORD_FILE.read_text(encoding="utf-8"))
+    else:
+        print(
+            f"No {KEYWORD_FILE.name} — skipping brand keyword seed "
+            "(keywords come from Dashboard / listening_queries)."
+        )
 
-    payload = json.loads(KEYWORD_FILE.read_text(encoding="utf-8"))
     print("Seeding listening config to Postgres...")
 
     with get_connection() as conn:
         cur = conn.cursor()
         brand_ids = _brand_map(cur)
-        seed_aggregate(cur, payload, args.force)
-        seed_brand_queries(cur, payload, brand_ids, args.force)
+        if payload is not None:
+            seed_aggregate(cur, payload, args.force)
+            seed_brand_queries(cur, payload, brand_ids, args.force)
         seed_cinemas(cur, brand_ids, args.force)
         seed_exclude_rules(cur, args.force)
         seed_alert_rules(cur, brand_ids, args.force)

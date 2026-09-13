@@ -56,6 +56,10 @@ MAX_REPLIES = POLICY.max_comments
 DETAIL_KEYWORD_RUNTIME_SECONDS = int(
     os.getenv("THREADS_DETAIL_KEYWORD_RUNTIME_SECONDS", str(POLICY.keyword_runtime_seconds))
 )
+DETAIL_MAX_URLS = int(os.getenv("THREADS_DETAIL_MAX_URLS", str(max(POLICY.final_limit, 80))) or "80")
+DETAIL_MAX_RUNTIME_SECONDS = int(
+    os.getenv("THREADS_DETAIL_MAX_RUNTIME_SECONDS", "1500") or "1500"
+)
 OUTPUT_FILE = platform_raw_dir("threads") / "threads_all_threads.json"
 
 
@@ -87,20 +91,27 @@ def main() -> int:
         processed_urls = {
             normalize_thread_url(str(item.get("url") or "").strip())
             for item in records
-            if isinstance(item, dict)
+            if isinstance(item, dict) and not should_retry_thread_record(item)
         }
         processed_urls.discard("")
 
-        pending_items = [item for item in thread_urls if item["url"] not in processed_urls]
-        skipped_already = len(thread_urls) - len(pending_items)
+        pending_all = [item for item in thread_urls if item["url"] not in processed_urls]
+        skipped_already = len(thread_urls) - len(pending_all)
+        pending_items = select_pending_thread_urls(pending_all, DETAIL_MAX_URLS)
 
         print(f"[threads-detail] Total URLs in input: {len(thread_urls)}")
         print(f"[threads-detail] Already processed: {len(processed_urls)}")
-        print(f"[threads-detail] Pending detail: {len(pending_items)} (skipped_listed={skipped_already})")
+        print(
+            f"[threads-detail] Pending this round: {len(pending_items)} "
+            f"(from {len(pending_all)}, cap={DETAIL_MAX_URLS}, skipped_listed={skipped_already})"
+        )
+        print(
+            f"[threads-detail] Runtime budget={DETAIL_MAX_RUNTIME_SECONDS}s "
+            f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+        )
         print(
             f"[threads-detail] Policy lookback={POLICY.lookback_days:.1f}d "
-            f"reply_scroll={MAX_SCROLL_ROUNDS_PER_THREAD} max_replies={MAX_REPLIES} "
-            f"keyword_runtime={DETAIL_KEYWORD_RUNTIME_SECONDS}s"
+            f"reply_scroll={MAX_SCROLL_ROUNDS_PER_THREAD} max_replies={MAX_REPLIES}"
         )
 
         if not pending_items:
@@ -121,9 +132,20 @@ def main() -> int:
             stale_count = 0
             failed_count = 0
             runtime_skipped = 0
+            stopped_for_runtime = False
+            run_started = time.monotonic()
             total = len(pending_items)
 
             for index, item in enumerate(pending_items, start=1):
+                if time.monotonic() - run_started >= DETAIL_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[threads-detail] stop early: detail_runtime_limit "
+                        f"({DETAIL_MAX_RUNTIME_SECONDS}s) at {index - 1}/{total}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 url = item["url"]
                 search_keyword = item["keyword"]
                 search_keywords = item.get("keywords") or ([search_keyword] if search_keyword else [])
@@ -182,8 +204,14 @@ def main() -> int:
                 freshness = record.get("freshness") or classify_detail_freshness(content_timestamp, POLICY)
                 record["freshness"] = freshness
 
-                state.mark_crawled(url, "threads", search_keyword, content_timestamp)
-                state.mark_crawled(url, "threads_detail", search_keyword, content_timestamp)
+                if content_timestamp:
+                    state.mark_crawled(url, "threads", search_keyword, content_timestamp)
+                    state.mark_crawled(url, "threads_detail", search_keyword, content_timestamp)
+                else:
+                    print(
+                        f"[threads-detail] no created_time for {url} — not marking crawled",
+                        flush=True,
+                    )
 
                 replies = record.get("articles") if isinstance(record.get("articles"), list) else []
                 # articles[0] is usually the root post; replies are the rest
@@ -242,10 +270,14 @@ def main() -> int:
             print(f"  - Runtime-limit skipped: {runtime_skipped}", flush=True)
             print(f"  - Total saved: {len(records)}", flush=True)
             print(f"  - Output: {OUTPUT_FILE.resolve()}", flush=True)
+            if stopped_for_runtime:
+                print(
+                    "[threads-detail] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             leave_chrome_open(driver)
-
 
 def resolve_input_file() -> Path:
     if THREADS_INPUT_FILE:
@@ -260,6 +292,24 @@ def resolve_input_file() -> Path:
         if path.exists():
             return path
     return FILTERED_INPUT_FILE
+
+
+def select_pending_thread_urls(pending: list[dict], limit: int) -> list[dict]:
+    if limit <= 0 or len(pending) <= limit:
+        return pending
+    return list(reversed(pending))[:limit]
+
+
+def should_retry_thread_record(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return True
+    if item.get("stale") or item.get("freshness") == "stale" or item.get("coverage") is False:
+        return False
+    if not (item.get("created_time") or item.get("timestamp") or item.get("content_timestamp")):
+        return True
+    if item.get("error"):
+        return True
+    return False
 
 
 def load_thread_urls(path: Path) -> list[dict]:
@@ -277,6 +327,8 @@ def load_thread_urls(path: Path) -> list[dict]:
     merged: dict[str, dict] = {}
     for item in payload:
         if not isinstance(item, dict):
+            continue
+        if item.get("pending_detail") is False:
             continue
         url = normalize_thread_url(str(item.get("url") or "").strip())
         if not url:

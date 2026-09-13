@@ -22,6 +22,7 @@ from social_listening.paths import ensure_dir
 from social_listening.review_utils import (
     clean_google_maps_author,
     clean_google_maps_place_title,
+    resolve_google_maps_place_display_name,
     clean_google_maps_review_text,
     compact_whitespace,
     is_google_maps_ui_junk,
@@ -79,12 +80,16 @@ def parse_place_record(item: dict) -> dict:
     if not place_id:
         return {}
 
-    title = clean_google_maps_place_title(metadata.get("title")) or clean_google_maps_place_title(
-        item.get("search_keyword")
-    )
+    raw_title = clean_google_maps_place_title(metadata.get("title"))
+    search_keyword = str(item.get("search_keyword") or "").strip()
     address = compact_whitespace(metadata.get("address"))
     if is_google_maps_ui_junk(address):
         address = ""
+    title = resolve_google_maps_place_display_name(
+        title=raw_title,
+        search_keyword=search_keyword,
+        address=address,
+    ) or clean_google_maps_place_title(search_keyword)
     place_rating = normalize_rating(metadata.get("rating_text"))
     place_review_count = parse_compact_int(metadata.get("review_count_text"))
     crawled_at = normalize_created_at(item.get("crawled_at")) or datetime.now(timezone.utc).isoformat()

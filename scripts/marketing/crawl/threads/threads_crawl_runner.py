@@ -68,6 +68,14 @@ PAGE_LOAD_WAIT_SECONDS = float(os.getenv("THREADS_PAGE_LOAD_WAIT_SECONDS", "5.0"
 MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("threads") / "threads_search_results.json"
+SEARCH_MAX_RUNTIME_SECONDS = int(os.getenv("THREADS_SEARCH_MAX_RUNTIME_SECONDS", "1500") or "1500")
+SEARCH_PENDING_CAP = int(os.getenv("THREADS_SEARCH_PENDING_CAP", "300") or "300")
+# Default Recent+Top; set THREADS_SEARCH_MODES=recent to cut evening burn.
+SEARCH_MODES = [
+    m.strip()
+    for m in str(os.getenv("THREADS_SEARCH_MODES", "recent,top") or "recent,top").split(",")
+    if m.strip()
+]
 # Native Threads Recent filter — URL param is reliable; Top-tab UI click is NOT
 # (smoke 2026-09-11: clicking "Recent" left SERP on Top and did not add filter=recent).
 SPECIAL_SEARCH_URLS = {
@@ -112,9 +120,12 @@ def main() -> int:
             f"content_stale_stop={POLICY.consecutive_stale_content_stop}"
         )
         print(
-            "[threads-search] Note: crawl BOTH Recent (filter=recent URL) AND Top; "
-            "Recent alone is often phone/Galaxy spam for cinema keywords; "
-            "merge+dedupe; UI Recent click is backup only"
+            f"[threads-search] Modes={SEARCH_MODES} search_runtime_budget={SEARCH_MAX_RUNTIME_SECONDS}s "
+            f"pending_cap={SEARCH_PENDING_CAP}"
+        )
+        print(
+            "[threads-search] Note: crawl Recent (+ Top if enabled); merge+dedupe; "
+            "self-stop before pipeline 1800s kill"
         )
 
         run_id = state.start_run("threads", run_type)
@@ -124,9 +135,31 @@ def main() -> int:
             new_results: list[dict] = []
             urls_discovered = 0
             urls_new = 0
+            keywords_done = 0
+            stopped_for_runtime = False
+            run_started = time.monotonic()
+
+            def persist() -> None:
+                ensure_dir(OUTPUT_FILE.parent)
+                existing_results = load_existing_results()
+                merged_results = merge_results(existing_results, new_results)
+                merged_results = prune_search_backlog(merged_results, SEARCH_PENDING_CAP)
+                OUTPUT_FILE.write_text(
+                    json.dumps(merged_results, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
             for index, keyword in enumerate(search_terms, start=1):
-                print(f"[threads-search] {index}/{len(search_terms)} keyword={keyword}")
+                if time.monotonic() - run_started >= SEARCH_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[threads-search] stop early: search_runtime_limit "
+                        f"({SEARCH_MAX_RUNTIME_SECONDS}s) at keyword {index - 1}/{len(search_terms)}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
+                print(f"[threads-search] {index}/{len(search_terms)} keyword={keyword}", flush=True)
                 try:
                     search_result = search_threads_for_keyword_incremental(
                         driver,
@@ -134,7 +167,7 @@ def main() -> int:
                         existing_urls,
                     )
                 except Exception as exc:
-                    print(f"[threads-search] skip keyword={keyword} error={exc}")
+                    print(f"[threads-search] skip keyword={keyword} error={exc}", flush=True)
                     new_results.append(
                         {
                             "keyword": keyword,
@@ -143,8 +176,10 @@ def main() -> int:
                             "error": str(exc),
                         }
                     )
+                    persist()
                     continue
 
+                keywords_done += 1
                 stats: KeywordCrawlStats = search_result["stats"]
                 stats.log("threads-search")
                 urls = search_result["urls"]
@@ -154,6 +189,7 @@ def main() -> int:
                 urls_new += len(urls)
 
                 if not urls:
+                    persist()
                     continue
 
                 for position, url in enumerate(urls, start=1):
@@ -170,31 +206,39 @@ def main() -> int:
                             "pending_detail": True,
                         }
                     )
+                persist()
 
-            ensure_dir(OUTPUT_FILE.parent)
-            existing_results = load_existing_results()
-            merged_results = merge_results(existing_results, new_results)
-
-            OUTPUT_FILE.write_text(
-                json.dumps(merged_results, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            persist()
 
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
                 urls_crawled=0,
                 urls_skipped=len(existing_urls),
-                keywords_processed=len(search_terms),
+                keywords_processed=keywords_done,
             )
 
-            print(f"[threads-search] Summary:")
-            print(f"  - Discovered (all keywords): {urls_discovered}")
-            print(f"  - New URLs queued for detail: {urls_new}")
-            print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
+            print(f"[threads-search] Summary:", flush=True)
+            print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
+            print(f"  - New URLs queued for detail: {urls_new}", flush=True)
+            print(f"  - Keywords done: {keywords_done}/{len(search_terms)}", flush=True)
+            print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
+            if stopped_for_runtime:
+                print(
+                    "[threads-search] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
-            driver.quit()
+            try:
+                from social_listening.chromedriver_utils import leave_chrome_open
+
+                leave_chrome_open(driver)
+            except Exception:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
 
 def search_threads_for_keyword_incremental(
@@ -476,30 +520,40 @@ def merge_results(existing: list[dict], new: list[dict]) -> list[dict]:
     return sorted(by_url.values(), key=lambda x: x.get("url", ""))
 
 
-def resolve_search_urls(keyword: str) -> list[str]:
-    """
-    Crawl Recent AND Top.
+def prune_search_backlog(results: list[dict], pending_cap: int) -> list[dict]:
+    if pending_cap <= 0:
+        return results
+    pending = [r for r in results if isinstance(r, dict) and r.get("pending_detail", True) and r.get("url")]
+    done = [r for r in results if isinstance(r, dict) and r.get("pending_detail") is False]
+    other = [r for r in results if not isinstance(r, dict) or (isinstance(r, dict) and not r.get("url"))]
+    if len(pending) <= pending_cap:
+        return results
+    kept = pending[-pending_cap:]
+    print(
+        f"[threads-search] prune pending backlog {len(pending)} → {len(kept)} "
+        f"(dropped {len(pending) - len(kept)})",
+        flush=True,
+    )
+    return done + kept + other
 
-    Recent: &filter=recent (freshness).
-    Top: no filter (relevance — needed for cinema keywords like "rạp galaxy").
-    """
+
+def resolve_search_urls(keyword: str) -> list[str]:
+    """Return SERP URLs for configured SEARCH_MODES (recent / top). One URL per mode."""
     normalized = " ".join(str(keyword or "").strip().lower().split())
     q = quote(keyword)
-    recent_urls = [
-        f"https://www.threads.com/search?q={q}&filter=recent",
-        f"https://www.threads.com/search?q={q}&serp_type=default&filter=recent",
-    ]
-    if normalized in SPECIAL_SEARCH_URLS:
-        recent_urls = list(SPECIAL_SEARCH_URLS[normalized])
-    top_urls = [
-        f"https://www.threads.com/search?q={q}",
-        f"https://www.threads.com/search?q={q}&serp_type=default",
-    ]
+    recent_primary = f"https://www.threads.com/search?q={q}&filter=recent"
+    if normalized in SPECIAL_SEARCH_URLS and SPECIAL_SEARCH_URLS[normalized]:
+        recent_primary = SPECIAL_SEARCH_URLS[normalized][0]
+    catalog = {
+        "recent": recent_primary,
+        "top": f"https://www.threads.com/search?q={q}",
+    }
     out: list[str] = []
-    for url in recent_urls + top_urls:
-        if url not in out:
+    for mode in SEARCH_MODES or ["recent", "top"]:
+        url = catalog.get(mode)
+        if url and url not in out:
             out.append(url)
-    return out
+    return out or [recent_primary, catalog["top"]]
 
 
 def recent_filter_in_url(url: str) -> bool:

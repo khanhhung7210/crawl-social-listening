@@ -311,6 +311,8 @@ class PipelineRunner:
 
         crawl_runner_failed = False
         browser_runner_failed = False
+        search_runner_failed = False
+        detail_runner_ok = False
 
         for step in self.config.get("steps") or []:
             stage = str(step.get("stage") or "crawl")
@@ -323,7 +325,11 @@ class PipelineRunner:
                 continue
 
             script_name = Path(script).name.lower()
-            if crawl_runner_failed and stage in {"format", "filter"}:
+            # Format/filter need a successful detail (or a clean crawl). Soft-fail
+            # search timeout if detail later salvages URLs left on disk.
+            if stage in {"format", "filter"} and (
+                crawl_runner_failed or (search_runner_failed and not detail_runner_ok)
+            ):
                 self.log(
                     f"Skipping {script_name} — crawl runner failed earlier "
                     "(avoid reprocessing stale data)",
@@ -333,6 +339,7 @@ class PipelineRunner:
                 continue
 
             # Search attach timeout → do not burn another 90s on detail attach.
+            # Search *timeout with URLs* is different — allow video/post detail.
             if browser_runner_failed and script_name.endswith("_runner.py"):
                 self.log(
                     f"Skipping {script_name} — earlier browser runner failed "
@@ -360,10 +367,32 @@ class PipelineRunner:
                     if not self.args.skip_sync:
                         if "--flush-import" not in extra_args and "--no-flush-import" not in extra_args:
                             extra_args.append("--flush-import")
-            if not self.run_command(script, label, extra_args=extra_args or None):
+            if self.run_command(script, label, extra_args=extra_args or None):
+                if script_name.endswith(
+                    ("_video_runner.py", "_post_runner.py", "_replies_runner.py")
+                ):
+                    detail_runner_ok = True
+                    search_runner_failed = False
+            else:
                 if stage == "crawl" and script_name.endswith("_runner.py"):
-                    crawl_runner_failed = True
-                    browser_runner_failed = True
+                    soft_search = (
+                        "search_runner" in script_name
+                        or script_name
+                        in {
+                            "threads_crawl_runner.py",
+                            "facebook_raw_runner.py",
+                        }
+                    )
+                    if soft_search:
+                        # Timed-out / partial search may still have written URLs —
+                        # let detail (or FB trailing format) salvage this round.
+                        search_runner_failed = True
+                        if script_name == "facebook_raw_runner.py":
+                            # Search+detail combined; per-keyword jsonl already on disk.
+                            detail_runner_ok = True
+                    else:
+                        crawl_runner_failed = True
+                        browser_runner_failed = True
                 if not self.args.continue_on_error:
                     return False
 
@@ -371,7 +400,7 @@ class PipelineRunner:
             self.log("Stopping after crawl stage (--only-crawl)", "INFO")
             return not self.stats["failed"]
 
-        if crawl_runner_failed:
+        if crawl_runner_failed or (search_runner_failed and not detail_runner_ok):
             self.log(
                 "Skipping PostgreSQL Import — crawl runner failed "
                 "(no fresh data this round)",

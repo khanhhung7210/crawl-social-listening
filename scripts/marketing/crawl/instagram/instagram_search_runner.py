@@ -69,6 +69,14 @@ OUTPUT_FILE = platform_raw_dir("instagram") / "instagram_search_results.json"
 EMPTY_KEYWORD_ABORT = int(os.getenv("INSTAGRAM_SEARCH_EMPTY_ABORT", "5") or "5")
 # Cap merged search backlog so detail never sees multi-thousand queues again.
 SEARCH_PENDING_CAP = int(os.getenv("INSTAGRAM_SEARCH_PENDING_CAP", "400") or "400")
+# Finish ourselves before PIPELINE_CRAWL_STAGE_TIMEOUT (default 1800) kills the tree.
+SEARCH_MAX_RUNTIME_SECONDS = int(os.getenv("INSTAGRAM_SEARCH_MAX_RUNTIME_SECONDS", "1500") or "1500")
+# Logs 2026-09-13: keyword+explore+hashtag burned evening budget; hashtag optional.
+SEARCH_MODES = [
+    m.strip()
+    for m in str(os.getenv("INSTAGRAM_SEARCH_MODES", "keyword,explore") or "keyword,explore").split(",")
+    if m.strip()
+]
 
 # Smoke 2026-09-11:
 # - No reliable Recent/Latest UI on keyword search
@@ -101,8 +109,12 @@ def main() -> int:
             f"runtime={MAX_RUNTIME_SECONDS}s keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[instagram-search] Note: no reliable Recent UI; crawl keyword + explore + "
-            "hashtag SERPs then merge; FINAL newest sort happens at detail"
+            f"[instagram-search] Modes={SEARCH_MODES} search_runtime_budget={SEARCH_MAX_RUNTIME_SECONDS}s "
+            f"pending_cap={SEARCH_PENDING_CAP}"
+        )
+        print(
+            "[instagram-search] Note: default keyword+explore only (hashtag modes optional via "
+            "INSTAGRAM_SEARCH_MODES); FINAL newest sort happens at detail"
         )
 
         run_id = state.start_run("instagram", run_type)
@@ -117,8 +129,30 @@ def main() -> int:
             urls_new = 0
             consecutive_empty = 0
             aborted_empty = False
+            stopped_for_runtime = False
+            keywords_done = 0
+            run_started = time.monotonic()
+
+            def persist() -> None:
+                ensure_dir(OUTPUT_FILE.parent)
+                existing_results = load_existing_results()
+                merged_results = merge_results(existing_results, new_results)
+                merged_results = prune_search_backlog(merged_results, SEARCH_PENDING_CAP)
+                OUTPUT_FILE.write_text(
+                    json.dumps(merged_results, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
             for index, keyword in enumerate(search_terms, start=1):
+                if time.monotonic() - run_started >= SEARCH_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[instagram-search] stop early: search_runtime_limit "
+                        f"({SEARCH_MAX_RUNTIME_SECONDS}s) at keyword {index - 1}/{len(search_terms)}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
                 hb.update("keyword", f"{index}/{len(search_terms)} {keyword!r}")
                 print(
                     f"[instagram-search] {index}/{len(search_terms)} keyword={keyword}",
@@ -139,6 +173,7 @@ def main() -> int:
                         break
                     continue
 
+                keywords_done += 1
                 stats: KeywordCrawlStats = search_result["stats"]
                 stats.log("instagram-search")
                 urls = search_result["urls"]
@@ -160,11 +195,13 @@ def main() -> int:
                             flush=True,
                         )
                         break
+                    persist()
                     continue
 
                 consecutive_empty = 0
 
                 if not urls:
+                    persist()
                     continue
 
                 for url in urls:
@@ -182,29 +219,28 @@ def main() -> int:
                             "pending_detail": True,
                         }
                     )
+                persist()
 
-            ensure_dir(OUTPUT_FILE.parent)
-            existing_results = load_existing_results()
-            merged_results = merge_results(existing_results, new_results)
-            merged_results = prune_search_backlog(merged_results, SEARCH_PENDING_CAP)
-
-            OUTPUT_FILE.write_text(
-                json.dumps(merged_results, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            persist()
 
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
                 urls_crawled=0,
                 urls_skipped=len(existing_urls),
-                keywords_processed=len(search_terms),
+                keywords_processed=keywords_done,
             )
 
             print("[instagram-search] Summary:", flush=True)
             print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
             print(f"  - New URLs queued for detail: {urls_new}", flush=True)
+            print(f"  - Keywords done: {keywords_done}/{len(search_terms)}", flush=True)
             print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
+            if stopped_for_runtime:
+                print(
+                    "[instagram-search] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             if aborted_empty and urls_discovered <= 0 and urls_new <= 0:
                 print("[instagram-search] FAIL: zero discovery — not a healthy search round", flush=True)
                 return 1
@@ -373,32 +409,37 @@ def slugify_hashtag(keyword: str) -> str:
 
 def resolve_search_urls(keyword: str) -> list[tuple[str, str]]:
     q = quote(keyword)
-    urls = [
-        (f"https://www.instagram.com/explore/search/keyword/?q={q}", "keyword"),
-        (f"https://www.instagram.com/explore/search/?q={q}", "explore"),
-    ]
+    catalog: dict[str, tuple[str, str]] = {
+        "keyword": (f"https://www.instagram.com/explore/search/keyword/?q={q}", "keyword"),
+        "explore": (f"https://www.instagram.com/explore/search/?q={q}", "explore"),
+    }
     tag = slugify_hashtag(keyword)
     low = (keyword or "").casefold()
-    # Brand boost before slug hashtag so #galaxycinema always gets a share of budget.
     if "galaxy" in low and "cinema" not in tag:
-        urls.append(
-            (
-                f"https://www.instagram.com/explore/search/keyword/?q={quote('#galaxycinema')}",
-                "hashtag_galaxycinema",
-            )
+        catalog["hashtag_galaxycinema"] = (
+            f"https://www.instagram.com/explore/search/keyword/?q={quote('#galaxycinema')}",
+            "hashtag_galaxycinema",
         )
     if tag and len(tag) >= 4:
-        urls.append(
-            (f"https://www.instagram.com/explore/search/keyword/?q={quote('#' + tag)}", "hashtag")
+        catalog["hashtag"] = (
+            f"https://www.instagram.com/explore/search/keyword/?q={quote('#' + tag)}",
+            "hashtag",
         )
-    # Dedupe URLs keep order
+
+    wanted = SEARCH_MODES or ["keyword", "explore"]
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for url, mode in urls:
+    for mode in wanted:
+        item = catalog.get(mode)
+        if not item:
+            continue
+        url, mode_name = item
         if url in seen:
             continue
         seen.add(url)
-        out.append((url, mode))
+        out.append((url, mode_name))
+    if not out:
+        out = [catalog["keyword"], catalog["explore"]]
     return out
 
 

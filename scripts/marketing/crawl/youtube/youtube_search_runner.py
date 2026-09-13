@@ -73,6 +73,19 @@ PAGE_LOAD_WAIT_SECONDS = float(os.getenv("YOUTUBE_PAGE_LOAD_WAIT_SECONDS", "4.0"
 MAX_RUNTIME_SECONDS = POLICY.max_runtime_seconds
 KEYWORD_RUNTIME_SECONDS = POLICY.keyword_runtime_seconds
 OUTPUT_FILE = platform_raw_dir("youtube") / "youtube_search_results.json"
+# Finish ourselves before PIPELINE_CRAWL_STAGE_TIMEOUT (default 1800) kills the tree.
+SEARCH_MAX_RUNTIME_SECONDS = int(os.getenv("YOUTUBE_SEARCH_MAX_RUNTIME_SECONDS", "1500") or "1500")
+SEARCH_PENDING_CAP = int(os.getenv("YOUTUBE_SEARCH_PENDING_CAP", "300") or "300")
+# Logs 2026-09-13: 3 modes × ~100/keyword burned 1800s by keyword 13/91; Relevance
+# mostly old viral. Default This-week + Upload-date; set YOUTUBE_SEARCH_MODES=… to restore.
+SEARCH_MODES = [
+    m.strip()
+    for m in str(
+        os.getenv("YOUTUBE_SEARCH_MODES", "this_week,upload_date") or "this_week,upload_date"
+    ).split(",")
+    if m.strip()
+]
+MODE_BUDGET = int(os.getenv("YOUTUBE_MODE_BUDGET", "0") or "0")
 
 
 def main() -> int:
@@ -94,12 +107,16 @@ def main() -> int:
         print(f"[youtube-search] Existing URLs: {len(existing_urls)}")
         print(
             f"[youtube-search] Policy discovery={DISCOVERY_LIMIT} final={FINAL_LIMIT} "
-            f"scroll={MAX_SCROLL_ROUNDS} runtime={MAX_RUNTIME_SECONDS}s"
+            f"scroll={MAX_SCROLL_ROUNDS} runtime={MAX_RUNTIME_SECONDS}s "
+            f"keyword_runtime={KEYWORD_RUNTIME_SECONDS}s"
         )
         print(
-            "[youtube-search] Note: crawl This-week + Upload-date + Relevance "
-            "(Relevance alone looks 'all old'; Upload-date still mixes old; "
-            "This-week is the real fresh window); UI filter click is backup only"
+            f"[youtube-search] Modes={SEARCH_MODES} search_runtime_budget={SEARCH_MAX_RUNTIME_SECONDS}s "
+            f"pending_cap={SEARCH_PENDING_CAP}"
+        )
+        print(
+            "[youtube-search] Note: default This-week + Upload-date only (Relevance burned "
+            "budget on old hits). Override via YOUTUBE_SEARCH_MODES."
         )
 
         run_id = state.start_run("youtube", run_type)
@@ -110,17 +127,40 @@ def main() -> int:
             global_seen: set[str] = set()
             urls_discovered = 0
             urls_new = 0
+            run_started = time.monotonic()
+            stopped_for_runtime = False
+            keywords_done = 0
+
+            def persist() -> None:
+                ensure_dir(OUTPUT_FILE.parent)
+                existing_results = load_existing_results()
+                merged = merge_results(existing_results, new_results)
+                merged = prune_search_backlog(merged, SEARCH_PENDING_CAP)
+                OUTPUT_FILE.write_text(
+                    json.dumps(merged, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
             for index, keyword in enumerate(search_terms, start=1):
-                print(f"[youtube-search] {index}/{len(search_terms)} keyword={keyword}")
+                if time.monotonic() - run_started >= SEARCH_MAX_RUNTIME_SECONDS:
+                    print(
+                        f"[youtube-search] stop early: search_runtime_limit "
+                        f"({SEARCH_MAX_RUNTIME_SECONDS}s) at keyword {index - 1}/{len(search_terms)}",
+                        flush=True,
+                    )
+                    stopped_for_runtime = True
+                    break
+
+                print(f"[youtube-search] {index}/{len(search_terms)} keyword={keyword}", flush=True)
                 try:
                     search_result = search_videos_for_keyword_incremental(
                         driver, keyword, existing_urls
                     )
                 except Exception as exc:
-                    print(f"[youtube-search] skip keyword={keyword} error={exc}")
+                    print(f"[youtube-search] skip keyword={keyword} error={exc}", flush=True)
                     continue
 
+                keywords_done += 1
                 stats: KeywordCrawlStats = search_result["stats"]
                 stats.log("youtube-search")
                 urls = search_result["urls"]
@@ -129,6 +169,7 @@ def main() -> int:
 
                 if not urls:
                     print(f"[youtube-search] No new URLs for keyword={keyword}")
+                    persist()
                     continue
 
                 for url in urls:
@@ -147,28 +188,29 @@ def main() -> int:
                     })
                     # Do not mark at search time — detail owns coverage + published_at.
 
-            # Merge with existing
-            ensure_dir(OUTPUT_FILE.parent)
-            existing_results = load_existing_results()
-            merged = merge_results(existing_results, new_results)
+                # Persist each keyword so a pipeline kill still leaves detailable URLs.
+                persist()
 
-            OUTPUT_FILE.write_text(
-                json.dumps(merged, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            persist()
 
             state.complete_run(
                 run_id,
                 urls_discovered=urls_discovered,
                 urls_crawled=0,
                 urls_skipped=len(existing_urls),
-                keywords_processed=len(search_terms)
+                keywords_processed=keywords_done,
             )
 
-            print(f"[youtube-search] Summary:")
-            print(f"  - Discovered (all keywords): {urls_discovered}")
-            print(f"  - New URLs queued for detail: {urls_new}")
-            print(f"  - Saved to: {OUTPUT_FILE.resolve()}")
+            print(f"[youtube-search] Summary:", flush=True)
+            print(f"  - Discovered (all keywords): {urls_discovered}", flush=True)
+            print(f"  - New URLs queued for detail: {urls_new}", flush=True)
+            print(f"  - Keywords done: {keywords_done}/{len(search_terms)}", flush=True)
+            print(f"  - Saved to: {OUTPUT_FILE.resolve()}", flush=True)
+            if stopped_for_runtime:
+                print(
+                    "[youtube-search] Partial round OK (self-stopped before pipeline kill)",
+                    flush=True,
+                )
             return 0
         finally:
             leave_chrome_open(driver)
@@ -187,7 +229,7 @@ def search_videos_for_keyword_incremental(
     already_seen = 0
     stop_reason = "no_results"
     keyword_started = time.monotonic()
-    mode_budget = max(8, MAX_VIDEOS // 3)
+    mode_budget = MODE_BUDGET if MODE_BUDGET > 0 else max(15, MAX_VIDEOS // max(4, len(SEARCH_MODES) or 1))
     mode_counts = {"this_week": 0, "upload_date": 0, "relevance": 0}
     upload_filter_ok = False
 
@@ -198,7 +240,7 @@ def search_videos_for_keyword_incremental(
         if len(urls) >= MAX_VIDEOS:
             stop_reason = "max_videos_reached"
             break
-        if mode_counts[mode] >= mode_budget:
+        if mode_counts.get(mode, 0) >= mode_budget:
             continue
 
         driver.get(search_url)
@@ -268,7 +310,7 @@ def search_videos_for_keyword_incremental(
                     already_seen += 1
                     continue
                 urls.append(normalized)
-                mode_counts[mode] += 1
+                mode_counts[mode] = mode_counts.get(mode, 0) + 1
                 if mode_counts[mode] >= mode_budget:
                     mode_full = True
                     stop_reason = f"{mode}_budget_reached"
@@ -281,12 +323,12 @@ def search_videos_for_keyword_incremental(
                 break
 
             idle_rounds = idle_rounds + 1 if len(urls) == before_count else 0
-            empty_rounds = empty_rounds + 1 if mode_counts[mode] == 0 and not already_seen else 0
+            empty_rounds = empty_rounds + 1 if mode_counts.get(mode, 0) == 0 and not already_seen else 0
             if scroll_rounds % 5 == 0 or idle_rounds == 0:
                 print(
                     f"[youtube-search] keyword={keyword} mode={mode} "
                     f"discovered={len(all_discovered)} queued={len(urls)} "
-                    f"mode_count={mode_counts[mode]}/{mode_budget} idle={idle_rounds}",
+                    f"mode_count={mode_counts.get(mode, 0)}/{mode_budget} idle={idle_rounds}",
                     flush=True,
                 )
             if idle_rounds >= IDLE_ROUNDS_BEFORE_STOP:
@@ -339,13 +381,42 @@ def search_videos_for_keyword_incremental(
 
 
 def resolve_search_urls(keyword: str) -> list[tuple[str, str]]:
-    """Return (url, mode): This-week first (fresh), then Upload-date, then Relevance."""
+    """Return (url, mode) for configured SEARCH_MODES (This-week / Upload-date / Relevance)."""
     q = quote_plus(keyword)
-    return [
-        (f"https://www.youtube.com/results?search_query={q}&sp={YOUTUBE_THIS_WEEK_SP}", "this_week"),
-        (f"https://www.youtube.com/results?search_query={q}&sp={YOUTUBE_UPLOAD_DATE_SP}", "upload_date"),
-        (f"https://www.youtube.com/results?search_query={q}", "relevance"),
-    ]
+    catalog = {
+        "this_week": (
+            f"https://www.youtube.com/results?search_query={q}&sp={YOUTUBE_THIS_WEEK_SP}",
+            "this_week",
+        ),
+        "upload_date": (
+            f"https://www.youtube.com/results?search_query={q}&sp={YOUTUBE_UPLOAD_DATE_SP}",
+            "upload_date",
+        ),
+        "relevance": (f"https://www.youtube.com/results?search_query={q}", "relevance"),
+    }
+    out: list[tuple[str, str]] = []
+    for mode in SEARCH_MODES:
+        item = catalog.get(mode)
+        if item:
+            out.append(item)
+    return out or [catalog["this_week"], catalog["upload_date"]]
+
+
+def prune_search_backlog(results: list[dict], pending_cap: int) -> list[dict]:
+    if pending_cap <= 0:
+        return results
+    pending = [r for r in results if isinstance(r, dict) and r.get("pending_detail", True)]
+    done = [r for r in results if isinstance(r, dict) and r.get("pending_detail") is False]
+    other = [r for r in results if not isinstance(r, dict)]
+    if len(pending) <= pending_cap:
+        return results
+    kept = pending[-pending_cap:]
+    print(
+        f"[youtube-search] prune pending backlog {len(pending)} → {len(kept)} "
+        f"(dropped {len(pending) - len(kept)})",
+        flush=True,
+    )
+    return done + kept + other
 
 
 def sp_token_in_url(url: str, token: str) -> bool:
