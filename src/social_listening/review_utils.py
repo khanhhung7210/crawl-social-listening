@@ -19,6 +19,21 @@ def __getattr__(name: str):
 _RELATIVE_ONLY_RE = re.compile(r"(?i)^\d+[smhdw]$")
 
 
+def is_facebook_album_photo_url(url: object) -> bool:
+    """True for Facebook photo-viewer URLs (album / carousel children).
+
+    Multi-image posts expose one URL per photo (`photo/?fbid=…&set=pcb.…`) that
+    often repeats the parent caption. Those pages are useful for **comment**
+    crawl, but must not create post-level buzz mentions.
+    """
+    text = str(url or "").strip().lower()
+    if not text or "facebook.com" not in text:
+        return False
+    if "photo/?fbid=" in text or "photo.php?" in text:
+        return True
+    return bool(re.search(r"/photo/\d+", text))
+
+
 def is_relative_only_time_label(value: object) -> bool:
     text = str(value or "").strip().casefold().replace(" ", "")
     return bool(_RELATIVE_ONLY_RE.fullmatch(text))

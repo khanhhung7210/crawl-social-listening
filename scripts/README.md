@@ -1,24 +1,37 @@
 # Scripts Reference
 
-Cây thư mục sau khi gọn theo **Marketing / Distribution → platform → keyword**:
+## Source A vs Source B (đọc trước khi sửa code)
+
+| Tên thư mục | Vai trò | Thư viện Python |
+|-------------|---------|------------------|
+| **`mkt/`**, **`dis/`** | **Source A** — crawl → format → filter → file JSON (`data/…`) | `src/social_listening/crawl/` (helper) |
+| **`source_b/`** | **Source B** — import JSON → Postgres, sentiment (PhoBERT), reprocess DB | `src/social_listening/processing/` |
+
+- **MKT** = thương hiệu Galaxy (`mkt/`). **DIS** = phim / distribution (`dis/`).
+- **`marketing`**, **`distribution`**, **`shared`** = symlink trỏ `mkt`, `dis`, `source_b` (lệnh/cron cũ vẫn chạy).
 
 ```text
 scripts/
-├── marketing/
+├── mkt/                           # Source A — Marketing
 │   ├── run_continuous.py          # treo terminal MKT
 │   ├── run_full_pipeline.py       # crawl → filter → import 1 platform
-│   ├── crawl/
-│   │   ├── facebook/ tiktok/ threads/ instagram/ youtube/
-│   │   ├── news/                  # Google News RSS
-│   │   └── reviews/               # App Store/Play + google_maps/
+│   ├── crawl/                     # facebook, tiktok, threads, …
 │   ├── classify/                  # campaign / CX topic / media_type
 │   └── metrics/                   # daily_brand_metrics
-├── distribution/
-│   ├── run_by_platform.py         # treo terminal DIS (1 Chrome / platform)
+├── dis/                           # Source A — Distribution (phim)
+│   ├── run_by_platform.py
 │   ├── crawl/                     # news phim, heatmap, screens
 │   ├── classify/                  # intent + region
-│   └── metrics/                   # daily_film_metrics
-├── shared/                        # import DB, purge, setup Postgres
+│   ├── metrics/                   # daily_film_metrics
+│   └── import_film_mentions.py    # import DB (gọi Source B processing)
+├── source_b/                      # Source B — Postgres + sentiment
+│   ├── import_keyword_mentions.py # MKT import
+│   ├── reprocess_sentiment.py
+│   ├── run_reprocess_sentiment_remote.sh
+│   └── run_source_b.py            # chạy pipeline trên 1 file JSON
+├── marketing → mkt                # alias
+├── distribution → dis
+├── shared → source_b
 └── windows/
 ```
 
@@ -34,8 +47,8 @@ Orchestrator:
 
 | Entry | Môi trường | Mô tả |
 |-------|------------|--------|
-| `marketing/run_full_pipeline.py` | Mac/Linux | Chạy full pipeline 1 platform hoặc `all` |
-| `marketing/run_continuous.py` | Mac/Linux | Loop vô hạn 1 platform (hoặc `news` / `all`) |
+| `mkt/run_full_pipeline.py` | Mac/Linux | Chạy full pipeline 1 platform hoặc `all` |
+| `mkt/run_continuous.py` | Mac/Linux | Loop vô hạn 1 platform (hoặc `news` / `all`) |
 | `windows/run_social_listening_daily.ps1` | Windows | Daily job: chạy song song 6 platform |
 | `windows/run_platform_pipeline.ps1` | Windows | Chạy tuần tự các step của 1 platform |
 
@@ -52,7 +65,7 @@ Thứ tự điển hình (ví dụ TikTok):
 Hoặc:
 
 ```bash
-PYTHONPATH=src python3 scripts/marketing/run_full_pipeline.py tiktok
+PYTHONPATH=src python3 scripts/mkt/run_full_pipeline.py tiktok
 ```
 
 ### Chạy liên tục (treo terminal)
@@ -65,13 +78,13 @@ source .venv/bin/activate
 export PYTHONPATH=src
 
 # Facebook (Chrome debug 9226 đã login)
-python3 scripts/marketing/run_continuous.py facebook
+python3 scripts/mkt/run_continuous.py facebook
 
 # Instagram (port 9224)
-python3 scripts/marketing/run_continuous.py instagram --sleep 180
+python3 scripts/mkt/run_continuous.py instagram --sleep 180
 
 # Có import DB mỗi vòng
-python3 scripts/marketing/run_continuous.py facebook --import-db --sleep 120
+python3 scripts/mkt/run_continuous.py facebook --import-db --sleep 120
 ```
 
 `Ctrl+C` để dừng. Lock: `logs/continuous-locks/<platform>.lock`
@@ -87,21 +100,21 @@ Chrome debug ports:
 | Facebook | `FACEBOOK_DEBUGGER_ADDRESS` | `127.0.0.1:9226` |
 | Google Maps | `GOOGLE_MAPS_DEBUGGER_ADDRESS` | `127.0.0.1:9227` |
 
-Keyword config dùng chung (Marketing / brand rạp): `data/shared/social_keywords.json`
+Keyword Marketing / brand rạp: lấy từ Postgres `listening_queries` (Dashboard Settings). Optional offline: `SOCIAL_CONFIG_SOURCE=file` + `SOCIAL_KEYWORD_CONFIG_FILE`.
 
 ### Distribution (phim chiếu → DB)
 
 ```bash
-PYTHONPATH=src python3 scripts/distribution/seed_films.py --apply-schema
-PYTHONPATH=src python3 scripts/distribution/run_distribution_pipeline.py \
+PYTHONPATH=src python3 scripts/dis/seed_films.py --apply-schema
+PYTHONPATH=src python3 scripts/dis/run_distribution_pipeline.py \
   --film 28_years_later_the_bone_temple --platform tiktok --import-db
 ```
 
-Chi tiết: `scripts/distribution/README.md`
+Chi tiết: `scripts/dis/README.md`
 
 ---
 
-## `marketing/crawl/facebook/`
+## `mkt/crawl/facebook/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
@@ -113,7 +126,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 
 ---
 
-## `marketing/crawl/instagram/`
+## `mkt/crawl/instagram/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
@@ -124,7 +137,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 
 ---
 
-## `marketing/crawl/threads/`
+## `mkt/crawl/threads/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
@@ -133,16 +146,14 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 | `threads_replies_runner.py` | Crawl thread + replies | filtered/search → `threads_all_threads.json` |
 | `threads_format_job.py` | Parse raw threads | all threads → `threads_grouped_parsed.json` |
 | `threads_keyword_filter_job.py` | Lọc theo keyword | grouped → `threads_keyword_mentions.json` |
-| `threads_runner.py` | **Legacy** — gọi EnsembleData API (không Selenium) | keywords cứng trong file → raw API JSON |
 
 ---
 
-## `marketing/crawl/tiktok/`
+## `mkt/crawl/tiktok/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
 | `tiktok_search_runner.py` | Crawl search video | keywords → `tiktok_search_results.json` |
-| `tiktok_search_runner_incremental.py` | Snippet/template incremental crawl (tham khảo) | — |
 | `tiktok_search_filter_job.py` | Pre-filter URL trước khi crawl video | search → `tiktok_search_results_filtered.json` |
 | `tiktok_video_runner.py` | Crawl chi tiết video + comments | filtered/search → `tiktok_all_videos.json` |
 | `tiktok_format_job.py` | Parse raw videos | all videos → `tiktok_grouped_parsed.json` |
@@ -150,7 +161,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 
 ---
 
-## `marketing/crawl/youtube/`
+## `mkt/crawl/youtube/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
@@ -162,7 +173,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 
 ---
 
-## `marketing/crawl/reviews/google_maps/`
+## `mkt/crawl/reviews/google_maps/`
 
 | File | Việc làm | Input → Output |
 |------|----------|----------------|
@@ -174,7 +185,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 
 ---
 
-## `marketing/classify/` + `marketing/metrics/`
+## `mkt/classify/` + `mkt/metrics/`
 
 | File | Việc làm |
 |------|----------|
@@ -199,7 +210,7 @@ Ghi chú: Facebook gộp search + detail trong `facebook_raw_runner.py` (không 
 | `import_keyword_mentions.py` | Import `*_keyword_mentions.json` → posts / comments / mentions |
 | `import_app_reviews.py` | Import JSON App Store/Play → `app_reviews` + snapshots |
 | `import_gbo_share.py` | Import CSV GBO share → `gbo_snapshots` |
-| `run_continuous.py` / `run_full_pipeline.py` | Shim → `scripts/marketing/…` (lệnh cũ vẫn chạy) |
+| `run_continuous.py` / `run_full_pipeline.py` | Shim → `scripts/mkt/…` (lệnh cũ vẫn chạy) |
 
 ### Cleanup / maintenance
 
@@ -238,7 +249,7 @@ Thứ tự step trong `run_platform_pipeline.ps1`:
 | facebook | raw → keyword_filter → format |
 | google_maps | search → review → format → keyword_filter |
 
-> Windows pipeline **chỉ** crawl + format + filter. Import DB / classify chạy riêng (`shared/` + `marketing/classify/`).
+> Windows pipeline **chỉ** crawl + format + filter. Import DB / classify chạy riêng (`source_b/` + `mkt/classify/`).
 
 ---
 
@@ -246,17 +257,17 @@ Thứ tự step trong `run_platform_pipeline.ps1`:
 
 ```bash
 # Import mentions từ mọi platform đã có keyword_mentions.json
-PYTHONPATH=src python3 scripts/shared/import_keyword_mentions.py
+PYTHONPATH=src python3 scripts/source_b/import_keyword_mentions.py
 
 # Campaign tracking (seed + classify + media_type + metrics)
-PYTHONPATH=src python3 scripts/marketing/classify/build_campaign_tracking.py --brand glx
+PYTHONPATH=src python3 scripts/mkt/classify/build_campaign_tracking.py --brand glx
 
 # Hoặc từng bước
-PYTHONPATH=src python3 scripts/marketing/classify/seed_campaigns.py
-PYTHONPATH=src python3 scripts/marketing/classify/classify_mention_campaigns.py --brand glx
-PYTHONPATH=src python3 scripts/marketing/classify/classify_mention_topics.py --brand glx
-PYTHONPATH=src python3 scripts/marketing/classify/resolve_mention_media_types.py
-PYTHONPATH=src python3 scripts/marketing/metrics/recompute_daily_brand_metrics.py
+PYTHONPATH=src python3 scripts/mkt/classify/seed_campaigns.py
+PYTHONPATH=src python3 scripts/mkt/classify/classify_mention_campaigns.py --brand glx
+PYTHONPATH=src python3 scripts/mkt/classify/classify_mention_topics.py --brand glx
+PYTHONPATH=src python3 scripts/mkt/classify/resolve_mention_media_types.py
+PYTHONPATH=src python3 scripts/mkt/metrics/recompute_daily_brand_metrics.py
 ```
 
 ---

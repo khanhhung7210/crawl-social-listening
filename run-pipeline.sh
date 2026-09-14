@@ -52,7 +52,7 @@ fi
 echo -e "${GREEN}Starting pipeline...${NC}"
 echo ""
 
-python3 scripts/marketing/run_full_pipeline.py "$@"
+python3 scripts/mkt/run_full_pipeline.py "$@"
 
 exit_code=$?
 

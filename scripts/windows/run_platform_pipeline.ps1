@@ -34,42 +34,42 @@ function Invoke-Step {
 
 $stepsByPlatform = @{
     "threads" = @(
-        "scripts/marketing/crawl/threads/threads_crawl_runner.py",
-        "scripts/marketing/crawl/threads/threads_search_filter_job.py",
-        "scripts/marketing/crawl/threads/threads_replies_runner.py",
-        "scripts/marketing/crawl/threads/threads_format_job.py",
-        "scripts/marketing/crawl/threads/threads_keyword_filter_job.py"
+        "scripts/mkt/crawl/threads/threads_crawl_runner.py",
+        "scripts/mkt/crawl/threads/threads_search_filter_job.py",
+        "scripts/mkt/crawl/threads/threads_replies_runner.py",
+        "scripts/mkt/crawl/threads/threads_format_job.py",
+        "scripts/mkt/crawl/threads/threads_keyword_filter_job.py"
     )
     "tiktok" = @(
-        "scripts/marketing/crawl/tiktok/tiktok_search_runner.py",
-        "scripts/marketing/crawl/tiktok/tiktok_search_filter_job.py",
-        "scripts/marketing/crawl/tiktok/tiktok_video_runner.py",
-        "scripts/marketing/crawl/tiktok/tiktok_format_job.py",
-        "scripts/marketing/crawl/tiktok/tiktok_keyword_filter_job.py"
+        "scripts/mkt/crawl/tiktok/tiktok_search_runner.py",
+        "scripts/mkt/crawl/tiktok/tiktok_search_filter_job.py",
+        "scripts/mkt/crawl/tiktok/tiktok_video_runner.py",
+        "scripts/mkt/crawl/tiktok/tiktok_format_job.py",
+        "scripts/mkt/crawl/tiktok/tiktok_keyword_filter_job.py"
     )
     "youtube" = @(
-        "scripts/marketing/crawl/youtube/youtube_search_runner.py",
-        "scripts/marketing/crawl/youtube/youtube_search_filter_job.py",
-        "scripts/marketing/crawl/youtube/youtube_video_runner.py",
-        "scripts/marketing/crawl/youtube/youtube_format_job.py",
-        "scripts/marketing/crawl/youtube/youtube_keyword_filter_job.py"
+        "scripts/mkt/crawl/youtube/youtube_search_runner.py",
+        "scripts/mkt/crawl/youtube/youtube_search_filter_job.py",
+        "scripts/mkt/crawl/youtube/youtube_video_runner.py",
+        "scripts/mkt/crawl/youtube/youtube_format_job.py",
+        "scripts/mkt/crawl/youtube/youtube_keyword_filter_job.py"
     )
     "instagram" = @(
-        "scripts/marketing/crawl/instagram/instagram_search_runner.py",
-        "scripts/marketing/crawl/instagram/instagram_post_runner.py",
-        "scripts/marketing/crawl/instagram/instagram_format_job.py",
-        "scripts/marketing/crawl/instagram/instagram_keyword_filter_job.py"
+        "scripts/mkt/crawl/instagram/instagram_search_runner.py",
+        "scripts/mkt/crawl/instagram/instagram_post_runner.py",
+        "scripts/mkt/crawl/instagram/instagram_format_job.py",
+        "scripts/mkt/crawl/instagram/instagram_keyword_filter_job.py"
     )
     "facebook" = @(
-        "scripts/marketing/crawl/facebook/facebook_raw_runner.py",
-        "scripts/marketing/crawl/facebook/facebook_keyword_filter_job.py",
-        "scripts/marketing/crawl/facebook/facebook_format_job.py"
+        "scripts/mkt/crawl/facebook/facebook_raw_runner.py",
+        "scripts/mkt/crawl/facebook/facebook_keyword_filter_job.py",
+        "scripts/mkt/crawl/facebook/facebook_format_job.py"
     )
     "google_maps" = @(
-        "scripts/marketing/crawl/reviews/google_maps/google_maps_search_runner.py",
-        "scripts/marketing/crawl/reviews/google_maps/google_maps_review_runner.py",
-        "scripts/marketing/crawl/reviews/google_maps/google_maps_format_job.py",
-        "scripts/marketing/crawl/reviews/google_maps/google_maps_keyword_filter_job.py"
+        "scripts/mkt/crawl/reviews/google_maps/google_maps_search_runner.py",
+        "scripts/mkt/crawl/reviews/google_maps/google_maps_review_runner.py",
+        "scripts/mkt/crawl/reviews/google_maps/google_maps_format_job.py",
+        "scripts/mkt/crawl/reviews/google_maps/google_maps_keyword_filter_job.py"
     )
 }
 

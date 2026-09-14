@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "marketing" / "metrics" / "recompute_daily_brand_metrics.py"
+SCRIPT = ROOT / "scripts" / "mkt" / "metrics" / "recompute_daily_brand_metrics.py"
 
 
 def _load_module():
@@ -183,6 +183,78 @@ class RecomputeDriverTest(unittest.TestCase):
     def test_rejects_inverted_range(self) -> None:
         with self.assertRaises(ValueError):
             m.recompute_daily_brand_metrics(FakeCursor(), from_date=D2, to_date=D1)
+
+
+    def test_fresh_sql_sentiment_counts_are_earned_only(self) -> None:
+        sql, _ = m.build_fresh_select_sql()
+        self.assertIn(
+            "sentiment = 'positive' AND COALESCE(media_type, 'earned') = 'earned'",
+            sql,
+        )
+        self.assertIn(
+            "sentiment = 'negative' AND COALESCE(media_type, 'earned') = 'earned'",
+            sql,
+        )
+        self.assertIn(
+            "sentiment = 'neutral' AND COALESCE(media_type, 'earned') = 'earned'",
+            sql,
+        )
+        # Volume mix still counts all media types separately.
+        self.assertIn("media_type = 'owned'", sql)
+        self.assertIn("media_type = 'paid'", sql)
+        self.assertIn("media_type = 'earned'", sql)
+
+
+class CustomerSentimentBuzzCasesTest(unittest.TestCase):
+    """Cases A–E: sentiment label stays; customer buzz is earned-only."""
+
+    def test_case_a_owned_positive_not_customer_buzz(self) -> None:
+        # Official brand post: Owned + Positive → label stays Positive,
+        # NOT counted as Customer Positive Buzz.
+        self.assertEqual(
+            m.customer_sentiment_bucket("owned", "positive"),
+            None,
+        )
+        self.assertTrue(m.is_customer_buzz_media("earned"))
+        self.assertFalse(m.is_customer_buzz_media("owned"))
+
+    def test_case_b_earned_positive_is_customer_buzz(self) -> None:
+        self.assertEqual(
+            m.customer_sentiment_bucket("earned", "positive"),
+            "positive",
+        )
+
+    def test_case_c_owned_negative_not_customer_buzz(self) -> None:
+        self.assertEqual(
+            m.customer_sentiment_bucket("owned", "negative"),
+            None,
+        )
+
+    def test_case_d_earned_negative_is_customer_buzz(self) -> None:
+        self.assertEqual(
+            m.customer_sentiment_bucket("earned", "negative"),
+            "negative",
+        )
+
+    def test_case_e_paid_positive_not_customer_buzz(self) -> None:
+        self.assertEqual(
+            m.customer_sentiment_bucket("paid", "positive"),
+            None,
+        )
+
+    def test_aggregate_mix_owned_paid_earned(self) -> None:
+        rows = [
+            {"media_type": "owned", "sentiment": "positive"},  # A
+            {"media_type": "earned", "sentiment": "positive"},  # B
+            {"media_type": "owned", "sentiment": "negative"},  # C
+            {"media_type": "earned", "sentiment": "negative"},  # D
+            {"media_type": "paid", "sentiment": "positive"},  # E
+            {"media_type": None, "sentiment": "neutral"},  # NULL → earned
+        ]
+        self.assertEqual(
+            m.aggregate_customer_sentiment(rows),
+            {"positive": 1, "negative": 1, "neutral": 1},
+        )
 
 
 class ParseArgsSmokeTest(unittest.TestCase):
