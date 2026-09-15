@@ -15,10 +15,32 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
 
-where python >nul 2>&1
+REM Tim Python: Windows thuong co "py" launcher, khong phai "python"
+set "PY="
+where py >nul 2>&1 && set "PY=py -3"
+if not defined PY where python >nul 2>&1 && set "PY=python"
+if not defined PY where python3 >nul 2>&1 && set "PY=python3"
+
+if not defined PY (
+  echo [ERROR] Khong tim thay Python trong PATH.
+  echo.
+  echo  Thu 1 trong cac cach:
+  echo    1^) Mo "Manage App Execution Aliases" ^(Windows Settings^)
+  echo       tat "python.exe" / "python3.exe" alias ^(neu dang bat^)
+  echo    2^) Cai Python 3.10+ tu https://www.python.org/downloads/
+  echo       QUAN TRONG: tick "Add python.exe to PATH"
+  echo    3^) Hoac cai tu Microsoft Store, roi mo CMD moi go:  py -3 --version
+  echo.
+  echo  Sau khi cai xong: dong cua so nay, mo lai run_crawl_windows.bat
+  echo.
+  pause
+  exit /b 1
+)
+
+REM Kiem tra version
+%PY% --version
 if errorlevel 1 (
-  echo [ERROR] Chua cai Python hoac chua co trong PATH.
-  echo         Cai Python 3.10+ va tick "Add python.exe to PATH".
+  echo [ERROR] Lenh "%PY%" khong chay duoc.
   pause
   exit /b 1
 )
@@ -42,6 +64,7 @@ echo.
 echo ========================================
 echo   Social Listening - Crawl Windows
 echo   Folder: %CD%
+echo   Python: %PY%
 echo ========================================
 echo.
 echo  Chon platform:
@@ -87,10 +110,10 @@ echo [INFO] Can Chrome debug dang mo ^(port theo platform^).
 echo        Facebook :9226  TikTok :9223  Threads :9222
 echo        Instagram :9224 YouTube :9225  Maps :9227
 echo.
-echo [RUN] python scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
+echo [RUN] %PY% scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
 echo.
 
-python scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
+%PY% scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
 set "ERR=%ERRORLEVEL%"
 
 echo.
@@ -98,10 +121,9 @@ if "%ERR%"=="0" (
   echo [OK] Xong platform=%PLATFORM%
   if "%MODE%"=="1" (
     echo       Da import DB + gan sentiment ^(neu .env Postgres OK^).
-    echo       media_type/campaign: import co the goi them classify.
   ) else (
-    echo       Chi co file JSON. Import sau bang:
-    echo       python scripts\source_b\import_keyword_mentions.py --film galaxy_cinema
+    echo       Chi co file JSON. Import sau:
+    echo       %PY% scripts\source_b\import_keyword_mentions.py --film galaxy_cinema
   )
 ) else (
   echo [FAIL] Exit code %ERR%
