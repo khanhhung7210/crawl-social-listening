@@ -429,26 +429,32 @@ def crawl_thread(
             idle_rounds = 0
             last_height = current_height
 
-    articles = driver.find_elements(By.TAG_NAME, "article")
+    articles = collect_thread_articles(driver)
     article_payloads: list[dict] = []
     matched_on = set()
 
     for index, article in enumerate(articles):
         if MAX_REPLIES > 0 and index > MAX_REPLIES:
             break
-        text = normalize_text(article.text)
+        raw_text = (article.get("text") or "").strip()
+        text = normalize_text(raw_text)
         if not text:
             continue
         matched_terms = find_matches(text, search_terms)
         payload = {
             "index": index,
-            "text": article.text,
-            "html": article.get_attribute("outerHTML"),
+            "text": raw_text,
+            "html": article.get("html") or "",
             "matched_terms": matched_terms,
         }
         if matched_terms:
             matched_on.add("post" if index == 0 else "reply")
         article_payloads.append(payload)
+    if len(article_payloads) <= 1:
+        print(
+            f"[threads-detail] low_article_count url={url} articles={len(article_payloads)}",
+            flush=True,
+        )
 
     page_source = driver.page_source
     body_text = driver.execute_script("return document.body ? document.body.innerText : '';") or ""
@@ -491,16 +497,20 @@ def expand_reply_buttons(driver: webdriver.Chrome) -> None:
         "//div[@role='button'][.//span[contains(normalize-space(), 'View replies')]]",
         "//div[@role='button'][.//span[contains(normalize-space(), 'View more replies')]]",
         "//div[@role='button'][.//span[contains(normalize-space(), 'View all replies')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'Show replies')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'See more')]]",
         "//div[@role='button'][.//span[contains(normalize-space(), 'Xem câu trả lời')]]",
         "//div[@role='button'][.//span[contains(normalize-space(), 'Xem thêm câu trả lời')]]",
         "//div[@role='button'][.//span[contains(normalize-space(), 'Xem tất cả câu trả lời')]]",
+        "//div[@role='button'][.//span[contains(normalize-space(), 'Xem thêm')]]",
+        "//*[@role='button' and (contains(@aria-label, 'replies') or contains(@aria-label, 'câu trả lời'))]",
     )
     for xpath in xpaths:
         try:
             elements = driver.find_elements(By.XPATH, xpath)
         except Exception:
             continue
-        for element in elements[:8]:
+        for element in elements[:12]:
             try:
                 if not element.is_displayed():
                     continue
@@ -508,6 +518,82 @@ def expand_reply_buttons(driver: webdriver.Chrome) -> None:
                 time.sleep(0.4)
             except Exception:
                 continue
+
+
+def collect_thread_articles(driver: webdriver.Chrome) -> list[dict]:
+    """Collect root + reply blocks. Threads DOM drifts; prefer role=article then article tag."""
+    try:
+        raw = driver.execute_script(
+            """
+            const out = [];
+            const seen = new Set();
+            const push = (el) => {
+              if (!el || seen.has(el)) return;
+              const text = (el.innerText || '').trim();
+              if (text.length < 8) return;
+              seen.add(el);
+              out.push({ text, html: el.outerHTML || '' });
+            };
+            for (const sel of ['[role="article"]', 'article', '[data-pressable-container="true"]']) {
+              for (const el of document.querySelectorAll(sel)) {
+                // Prefer leaf-ish blocks: skip huge page wrappers
+                const text = (el.innerText || '').trim();
+                if (text.length > 8000) continue;
+                push(el);
+              }
+              if (out.length >= 2) break;
+            }
+            // Deduplicate nested containers: keep shorter unique texts first
+            const unique = [];
+            const seenText = new Set();
+            for (const item of out.sort((a, b) => a.text.length - b.text.length)) {
+              const key = item.text.slice(0, 240);
+              let nested = false;
+              for (const prev of seenText) {
+                if (prev.includes(key) || key.includes(prev)) {
+                  nested = true;
+                  break;
+                }
+              }
+              if (nested) continue;
+              seenText.add(key);
+              unique.push(item);
+            }
+            return unique;
+            """
+        )
+    except Exception:
+        raw = []
+
+    if isinstance(raw, list) and raw:
+        return [item for item in raw if isinstance(item, dict)]
+
+    # Selenium fallback
+    elements = []
+    for by, value in (
+        ("css", "[role='article']"),
+        ("tag", "article"),
+    ):
+        try:
+            if by == "css":
+                found = driver.find_elements(By.CSS_SELECTOR, value)
+            else:
+                found = driver.find_elements(By.TAG_NAME, value)
+        except Exception:
+            found = []
+        if found:
+            elements = found
+            break
+    payloads: list[dict] = []
+    for el in elements:
+        try:
+            text = (el.text or "").strip()
+            if len(text) < 8:
+                continue
+            payloads.append({"text": text, "html": el.get_attribute("outerHTML") or ""})
+        except Exception:
+            continue
+    return payloads
 
 
 def build_driver() -> webdriver.Chrome:

@@ -374,6 +374,52 @@ def _link_brands(cur, mention_id: str, brands: list[str], brand_map: dict[str, s
         )
 
 
+def explain_post_mention_skip(
+    cur, post_id: str, platform: str, item: dict, brand_map: dict[str, str]
+) -> str:
+    """Best-effort reason when upsert_mention_for_post returns False (no new insert)."""
+    text = str(item.get("post_text") or item.get("text") or "")
+    permalink = item.get("post_url") or item.get("url")
+    if item.get("skip_post_mention") or is_facebook_album_photo_url(permalink):
+        return "skip_post_mention"
+    if platform == "google" and is_google_maps_ui_junk(text):
+        return "google_ui_junk"
+    if platform == "google" and not item.get("force_post_mention"):
+        return "google_place_container"
+    matches = item.get("post_keyword_matches") or item.get("matched_search_keywords") or []
+    author_key = str(item.get("page_id") or item.get("page_name") or "")
+    if not is_vietnam_relevant(text, permalink=str(permalink or ""), author=author_key, platform=platform):
+        return "not_vietnam"
+    brands = detect_competitive_brands(
+        text,
+        matches if isinstance(matches, list) else [],
+        permalink=str(permalink or ""),
+        author=author_key,
+        platform=platform,
+    )
+    if not brands:
+        return "no_brand"
+    occurred, date_source = resolve_post_occurred_at(item, platform)
+    if occurred is None:
+        return f"no_occurred:{date_source}"
+    cur.execute(
+        """
+        SELECT mention_id::text FROM mentions
+        WHERE mention_kind = 'post' AND post_id = %s::uuid
+        ORDER BY created_at ASC
+        LIMIT 1
+        """,
+        (post_id,),
+    )
+    if cur.fetchone():
+        return f"already_exists:{date_source}"
+    if date_source == "crawl_fallback":
+        return "crawl_fallback_blocked"
+    if date_source == "relative_unverified":
+        return "relative_unverified_blocked"
+    return f"update_or_other:{date_source}"
+
+
 def upsert_mention_for_post(
     cur, post_id: str, platform: str, item: dict, brand_map: dict[str, str]
 ) -> bool:
@@ -427,8 +473,20 @@ def upsert_mention_for_post(
     metadata = json.dumps(meta, ensure_ascii=False, default=str)
     if occurred is None:
         return False
+
+    # Fresh MXH posts almost always show relative UI labels ("2h", "5m"). Historically we
+    # only UPDATED existing rows for relative_unverified — so NEW Facebook/Threads posts
+    # never inserted (import posts=0). Allow insert for social platforms; keep Google Maps
+    # strict (relative-only must already exist).
+    social_relative_ok = platform in {
+        "facebook",
+        "threads",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "news",
+    }
     if date_source in {"crawl_fallback", "relative_unverified"}:
-        # Still refresh text/permalink, but never trust relative-only scrape dates.
         cur.execute(
             """
             SELECT mention_id::text FROM mentions
@@ -439,42 +497,46 @@ def upsert_mention_for_post(
             (post_id,),
         )
         row = cur.fetchone()
-        if not row:
+        if row:
+            mention_id = row[0]
+            cur.execute(
+                """
+                UPDATE mentions SET
+                    content_text = %s,
+                    sentiment = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment
+                        ELSE COALESCE(%s, sentiment)
+                    END,
+                    sentiment_provider = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment_provider
+                        ELSE COALESCE(%s, sentiment_provider)
+                    END,
+                    sentiment_score = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment_score
+                        ELSE COALESCE(%s, sentiment_score)
+                    END,
+                    permalink = COALESCE(%s, permalink),
+                    metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                    updated_at = NOW()
+                WHERE mention_id = %s::uuid
+                """,
+                (
+                    text or "(empty)",
+                    sentiment,
+                    sentiment_provider,
+                    sentiment_score,
+                    permalink,
+                    metadata,
+                    mention_id,
+                ),
+            )
+            _link_brands(cur, mention_id, brands, brand_map)
             return False
-        mention_id = row[0]
-        cur.execute(
-            """
-            UPDATE mentions SET
-                content_text = %s,
-                sentiment = CASE
-                    WHEN sentiment_provider = 'human' THEN sentiment
-                    ELSE COALESCE(%s, sentiment)
-                END,
-                sentiment_provider = CASE
-                    WHEN sentiment_provider = 'human' THEN sentiment_provider
-                    ELSE COALESCE(%s, sentiment_provider)
-                END,
-                sentiment_score = CASE
-                    WHEN sentiment_provider = 'human' THEN sentiment_score
-                    ELSE COALESCE(%s, sentiment_score)
-                END,
-                permalink = COALESCE(%s, permalink),
-                metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
-                updated_at = NOW()
-            WHERE mention_id = %s::uuid
-            """,
-            (
-                text or "(empty)",
-                sentiment,
-                sentiment_provider,
-                sentiment_score,
-                permalink,
-                metadata,
-                mention_id,
-            ),
-        )
-        _link_brands(cur, mention_id, brands, brand_map)
-        return False
+        if date_source == "relative_unverified" and social_relative_ok:
+            # Fall through to INSERT below with the parsed relative timestamp.
+            pass
+        else:
+            return False
     occurred_value = occurred
     cur.execute(
         """
@@ -588,7 +650,16 @@ def upsert_comment_mentions(
             if platform == "google":
                 commented_at = None
             else:
-                continue
+                # FB/Threads replies often have no timestamp crumb; inherit parent publish time.
+                parent_dt = parse_dt(
+                    (parent_item or {}).get("post_created_at")
+                    or (parent_item or {}).get("created_time")
+                    or (parent_item or {}).get("crawled_at")
+                )
+                if parent_dt is None:
+                    continue
+                commented_at = parent_dt
+                date_source = "post_inferred"
         ext = str(c.get("external_id") or c.get("id") or hashlib_fallback(c)).strip()
         if not ext:
             ext = hashlib_fallback(c)
@@ -800,6 +871,7 @@ def import_file(cur, path: Path, brand_map: dict[str, str]) -> tuple[int, int]:
         items = data
     posts_n = 0
     comments_n = 0
+    skip_reasons: dict[str, int] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -813,20 +885,29 @@ def import_file(cur, path: Path, brand_map: dict[str, str]) -> tuple[int, int]:
         if platform == "google_maps":
             platform = "google"
         if not platform_ok(platform, cur):
+            skip_reasons["platform_not_ok"] = skip_reasons.get("platform_not_ok", 0) + 1
             continue
         # Source B: normalize + sentiment before incremental upsert
         processed = process_keyword_item(item, platform)
         if not processed.ok:
+            reason = (processed.errors[0] if processed.errors else "process_failed")[:80]
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
         item = processed.item
         post_id = upsert_post(cur, item, platform)
         if upsert_mention_for_post(cur, post_id, platform, item, brand_map):
             posts_n += 1
+        else:
+            reason = explain_post_mention_skip(cur, post_id, platform, item, brand_map)
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
         matches = item.get("post_keyword_matches") or []
         _new_c, processed_c = upsert_comment_mentions(
             cur, post_id, platform, item.get("comments") or [], brand_map, matches if isinstance(matches, list) else [], item
         )
         comments_n += processed_c
+    if skip_reasons and posts_n == 0:
+        top = ", ".join(f"{k}={v}" for k, v in sorted(skip_reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:8])
+        print(f"  [import-skip] {path.name}: {top}")
     return posts_n, comments_n
 
 

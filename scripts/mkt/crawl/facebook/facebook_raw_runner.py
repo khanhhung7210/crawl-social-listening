@@ -1241,6 +1241,7 @@ def click_view_post_entrypoint(driver: webdriver.Chrome) -> None:
 
 def click_open_comments_entrypoint(driver: webdriver.Chrome) -> None:
     for xpath in (
+        "//*[@role='button' and (contains(@aria-label, 'Leave a comment') or contains(@aria-label, 'Comment') or contains(@aria-label, 'bình luận'))]",
         "//span[contains(normalize-space(), 'bình luận')]/ancestor::*[@role='button'][1]",
         "//span[contains(normalize-space(), 'comments')]/ancestor::*[@role='button'][1]",
         "//div[contains(normalize-space(), 'bình luận')]/ancestor::*[@role='button'][1]",
@@ -1248,7 +1249,7 @@ def click_open_comments_entrypoint(driver: webdriver.Chrome) -> None:
     ):
         try:
             elements = driver.find_elements(By.XPATH, xpath)
-            for element in elements[:2]:
+            for element in elements[:3]:
                 if not element.is_displayed():
                     continue
                 driver.execute_script("arguments[0].click();", element)
@@ -1408,6 +1409,9 @@ def focus_comment_section(driver: webdriver.Chrome) -> None:
 
 def open_comment_thread(driver: webdriver.Chrome) -> bool:
     for xpath in (
+        # Reel / watch comment icon (aria-label often "Leave a comment" / "Comment")
+        ".//*[@role='button' and (contains(@aria-label, 'Leave a comment') or contains(@aria-label, 'comment') or contains(@aria-label, 'bình luận') or contains(@aria-label, 'Comment'))]",
+        ".//*[@role='button' and .//*[contains(@aria-label, 'comment') or contains(@aria-label, 'bình luận')]]",
         ".//span[contains(normalize-space(), 'bình luận')]/ancestor::*[@role='button'][1]",
         ".//span[contains(normalize-space(), 'comments')]/ancestor::*[@role='button'][1]",
         ".//span[contains(normalize-space(), 'bình luận')]/ancestor::a[1]",
@@ -1418,7 +1422,13 @@ def open_comment_thread(driver: webdriver.Chrome) -> bool:
     ):
         try:
             elements = find_in_active_dialog(driver, xpath)
-            for element in elements[:2]:
+            # Document-wide fallback for reel side panel (not always inside dialog yet)
+            if not elements:
+                try:
+                    elements = driver.find_elements(By.XPATH, xpath.lstrip("."))
+                except Exception:
+                    elements = []
+            for element in elements[:3]:
                 if not element.is_displayed():
                     continue
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
@@ -1429,7 +1439,8 @@ def open_comment_thread(driver: webdriver.Chrome) -> bool:
                     driver.execute_script("arguments[0].click();", element)
                     time.sleep(0.5)
                     return True
-                return False
+                # Composer already visible → thread is open
+                return True
         except Exception:
             continue
     return False
@@ -1568,29 +1579,39 @@ def extract_comment_records(driver: webdriver.Chrome) -> list[dict]:
               'thích', 'trả lời', 'chia sẻ', 'gửi', 'đã chỉnh sửa', 'phù hợp nhất', 'tất cả bình luận',
               'view more comments', 'view previous comments', 'view more replies',
               'see more comments', 'see previous comments', 'see more replies',
-              'xem thêm bình luận', 'xem bình luận trước đó', 'xem thêm câu trả lời', 'xem thêm phản hồi'
+              'xem thêm bình luận', 'xem bình luận trước đó', 'xem thêm câu trả lời', 'xem thêm phản hồi',
+              'write a comment', 'viết bình luận', 'comment', 'bình luận'
             ]);
             const timePattern = /^(?:\\d+[smhdwy]|\\d+\\s*(?:phút|giờ|ngày|tuần|tháng|năm)|\\d+\\s*(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years))$/i;
             const metricPattern = /^[\\d.,]+(?:\\s*[KMBkmb])?$/;
             const nameLike = /^[\\p{L}][\\p{L}\\p{M}\\p{N}_.\\- ]{0,79}$/u;
 
             const selectors = [
+              // FB classic + reel: each comment often has aria-label "Comment by NAME"
+              '[aria-label^="Comment by"]',
+              '[aria-label^="Bình luận của"]',
+              '[aria-label*="Comment by "]',
+              '[aria-label*="Bình luận của "]',
               '[role="dialog"] [aria-label*="comment" i] ul li',
               '[role="dialog"] [aria-label*="bình luận" i] ul li',
               '[role="main"] [aria-label*="comment" i] ul li',
               '[role="main"] [aria-label*="bình luận" i] ul li',
               '[role="dialog"] [role="article"]',
               '[role="main"] [role="article"]',
+              // Reel side panel / complementary region
+              '[role="complementary"] [role="article"]',
+              '[role="complementary"] ul li',
               '[role="dialog"] ul li',
               '[role="main"] ul li',
             ];
 
             const pickTimeLabel = (node) => {
-              for (const abbr of node.querySelectorAll('abbr[aria-label], abbr[title], time[datetime], time[title]')) {
+              for (const abbr of node.querySelectorAll('abbr[aria-label], abbr[title], time[datetime], time[title], a[aria-label]')) {
                 const label = (abbr.getAttribute('aria-label') || abbr.getAttribute('title') || abbr.getAttribute('datetime') || '').trim();
-                if (label && /\\d/.test(label)) return label;
+                if (label && /\\d/.test(label) && label.length < 80) return label;
               }
               for (const line of (node.innerText || '').split('\\n').map((v) => v.trim()).filter(Boolean)) {
+                if (timePattern.test(line)) return line;
                 if (/\\d/.test(line) && /(tháng|thg|lúc|trước|ago|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(line)) {
                   return line;
                 }
@@ -1602,6 +1623,15 @@ def extract_comment_records(driver: webdriver.Chrome) -> list[dict]:
             const results = [];
             const seenTexts = new Set();
 
+            const pushText = (text, time_label) => {
+              const cleaned = (text || '').replace(/\\s+/g, ' ').trim();
+              if (!cleaned || seenTexts.has(cleaned)) return;
+              if (cleaned.length < 2 || cleaned.length > 2000) return;
+              if (blocked.has(cleaned.toLowerCase())) return;
+              seenTexts.add(cleaned);
+              results.push({ text: cleaned, time_label: time_label || '' });
+            };
+
             for (const selector of selectors) {
               for (const node of document.querySelectorAll(selector)) {
                 if (seenNodes.has(node)) continue;
@@ -1609,6 +1639,16 @@ def extract_comment_records(driver: webdriver.Chrome) -> list[dict]:
 
                 const rect = node.getBoundingClientRect();
                 if (rect.width === 0 || rect.height === 0) continue;
+
+                const aria = (node.getAttribute('aria-label') || '').trim();
+                // "Comment by Name: body text" — use body after first colon when present
+                if (/^(Comment by|Bình luận của)\\b/i.test(aria) && aria.includes(':')) {
+                  const body = aria.split(':').slice(1).join(':').trim();
+                  if (body && body.length >= 2) {
+                    pushText(body, pickTimeLabel(node));
+                    continue;
+                  }
+                }
 
                 const lines = (node.innerText || '')
                   .split('\\n')
@@ -1637,12 +1677,31 @@ def extract_comment_records(driver: webdriver.Chrome) -> list[dict]:
                 }
                 if (!textLines.length) continue;
 
-                const text = textLines.join(' ').replace(/\\s+/g, ' ').trim();
-                if (!text || seenTexts.has(text)) continue;
-                if (text.length < 2 || text.length > 2000) continue;
+                pushText(textLines.join(' '), pickTimeLabel(node));
+              }
+            }
 
-                seenTexts.add(text);
-                results.push({ text, time_label: pickTimeLabel(node) });
+            // Last-resort: embedded GraphQL comment bodies in page HTML (reels often keep these
+            // even when comment list DOM is virtualized / not yet scrolled into view).
+            if (results.length < 3) {
+              const html = document.documentElement ? document.documentElement.innerHTML : '';
+              const re = /"body"\\s*:\\s*\\{\\s*"text"\\s*:\\s*"((?:\\\\.|[^"\\\\]){2,800})"/g;
+              let match;
+              let safety = 0;
+              const unescapeFb = (raw) => {
+                try {
+                  return JSON.parse('"' + raw + '"');
+                } catch (e) {
+                  return raw
+                    .replace(/\\\\n/g, ' ')
+                    .replace(/\\\\"/g, '"')
+                    .replace(/\\\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+                    .trim();
+                }
+              };
+              while ((match = re.exec(html)) && safety < 80) {
+                safety += 1;
+                pushText(unescapeFb(match[1]), '');
               }
             }
             return results;
