@@ -10,10 +10,10 @@ Port DIS = MKT + 10 (tránh trùng khi chạy song song Marketing):
   facebook   MKT 9226 → DIS 9236
 
 Examples:
-  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py --list
-  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py tiktok --chrome-only
-  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py tiktok --all-active --import-db --continue-on-error
-  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py youtube --all-active --continuous --sleep 180
+  PYTHONPATH=src python3 scripts/dis/run_by_platform.py --list
+  PYTHONPATH=src python3 scripts/dis/run_by_platform.py tiktok --chrome-only
+  PYTHONPATH=src python3 scripts/dis/run_by_platform.py tiktok --all-active --import-db --continue-on-error
+  PYTHONPATH=src python3 scripts/dis/run_by_platform.py youtube --all-active --continuous --sleep 180
 """
 
 from __future__ import annotations

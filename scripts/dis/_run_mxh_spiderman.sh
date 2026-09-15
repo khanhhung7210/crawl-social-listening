@@ -11,20 +11,20 @@ FILM=nguoi_nhen_khoi_dau_moi
 PLATFORMS=(youtube tiktok facebook instagram threads)
 
 echo "[$(date +%H:%M:%S)] seed_films (once)"
-"$PY" -u scripts/distribution/seed_films.py
+"$PY" -u scripts/dis/seed_films.py
 
 for plat in "${PLATFORMS[@]}"; do
   log="/tmp/dis-mxh-parallel/${FILM}__${plat}.log"
   echo "[$(date +%H:%M:%S)] START $FILM / $plat → $log"
-  "$PY" -u scripts/distribution/run_distribution_pipeline.py \
+  "$PY" -u scripts/dis/run_distribution_pipeline.py \
     --film "$FILM" --platform "$plat" --import-db --continue-on-error --skip-seed \
     >"$log" 2>&1 &
 done
 wait
 echo "[$(date +%H:%M:%S)] all platforms done — classify"
-"$PY" -u scripts/distribution/classify/classify_mention_intent.py --film-slug "$FILM" --reclassify || true
-"$PY" -u scripts/distribution/classify/classify_mention_region.py || true
-"$PY" -u scripts/distribution/metrics/recompute_daily_film_metrics.py || true
+"$PY" -u scripts/dis/classify/classify_mention_intent.py --film-slug "$FILM" --reclassify || true
+"$PY" -u scripts/dis/classify/classify_mention_region.py || true
+"$PY" -u scripts/dis/metrics/recompute_daily_film_metrics.py || true
 "$PY" - <<'PY'
 from social_listening.pg import get_connection
 with get_connection() as conn:

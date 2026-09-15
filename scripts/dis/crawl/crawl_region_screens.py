@@ -5,9 +5,9 @@ Nguồn heatmap row "Screens" trên Distribution dashboard.
 Mặc định đếm suất chiếu Galaxy Cinema theo 6 tỉnh/TP (+ Khác = phần còn lại).
 
 Ví dụ:
-  PYTHONPATH=src python3 scripts/distribution/crawl/crawl_region_screens.py --all-active
-  PYTHONPATH=src python3 scripts/distribution/crawl/crawl_region_screens.py --film the_odyssey --seed-db
-  PYTHONPATH=src python3 scripts/distribution/crawl/crawl_region_screens.py --film minion --chain all --metric cinemas
+  PYTHONPATH=src python3 scripts/dis/crawl/crawl_region_screens.py --all-active
+  PYTHONPATH=src python3 scripts/dis/crawl/crawl_region_screens.py --film the_odyssey --seed-db
+  PYTHONPATH=src python3 scripts/dis/crawl/crawl_region_screens.py --film minion --chain all --metric cinemas
 """
 
 from __future__ import annotations
@@ -395,7 +395,7 @@ def main() -> int:
     print(f"\nWrote {SCREENS_OUT}")
 
     if args.seed_db:
-        cmd = [sys.executable, str(PROJECT_ROOT / "scripts/distribution/seed_films.py")]
+        cmd = [sys.executable, str(PROJECT_ROOT / "scripts/dis/seed_films.py")]
         print(f">>> {' '.join(cmd)}")
         subprocess.run(
             cmd,

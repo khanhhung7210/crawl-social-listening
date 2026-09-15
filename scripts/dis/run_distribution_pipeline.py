@@ -3,19 +3,18 @@
 Distribution pipeline — crawl MXH theo phim → import Postgres → daily_film_metrics.
 
 Giống MKT (run_full_pipeline + import), nhưng:
-  - Keyword config = Settings/DB (listening_queries movie) khi SOCIAL_CONFIG_SOURCE=db
-    hoặc data/distribution/films/<slug>.json khi source=file
+  - Keyword config = Settings/DB (listening_queries movie); mặc định SOCIAL_CONFIG_SOURCE=db
   - Import qua import_film_mentions.py (link mention_films, không bắt brand)
   - Metrics = daily_film_metrics
 
 Usage:
-  PYTHONPATH=src python3 scripts/distribution/run_distribution_pipeline.py \\
+  PYTHONPATH=src python3 scripts/dis/run_distribution_pipeline.py \\
     --film 28_years_later_the_bone_temple --platform tiktok
 
-  PYTHONPATH=src python3 scripts/distribution/run_distribution_pipeline.py \\
+  PYTHONPATH=src python3 scripts/dis/run_distribution_pipeline.py \\
     --all-active --platform facebook --import-db
 
-  PYTHONPATH=src python3 scripts/distribution/run_distribution_pipeline.py --list
+  PYTHONPATH=src python3 scripts/dis/run_distribution_pipeline.py --list
 """
 
 from __future__ import annotations

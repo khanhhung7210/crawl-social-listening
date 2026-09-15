@@ -10,8 +10,8 @@ Pipeline:
 Buzz theo vùng vẫn lấy từ mentions đã crawl (MXH/news); script này không thay pipeline social.
 
 Ví dụ:
-  PYTHONPATH=src python3 scripts/distribution/crawl/crawl_heatmap_data.py --all-active --seed-db
-  PYTHONPATH=src python3 scripts/distribution/crawl/crawl_heatmap_data.py --film the_odyssey --skip-screens
+  PYTHONPATH=src python3 scripts/dis/crawl/crawl_heatmap_data.py --all-active --seed-db
+  PYTHONPATH=src python3 scripts/dis/crawl/crawl_heatmap_data.py --film the_odyssey --skip-screens
 """
 
 from __future__ import annotations

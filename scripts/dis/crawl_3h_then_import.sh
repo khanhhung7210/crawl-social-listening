@@ -50,7 +50,7 @@ run_format_filter() {
   local film="$1" plat="$2"
   log "Format+filter film=$film platform=$plat (skip crawl)"
   env SOCIAL_LISTENING_PROFILE=dis SOCIAL_FILM_SLUG="$film" \
-    "$PY" -u scripts/marketing/run_full_pipeline.py "$plat" \
+    "$PY" -u scripts/mkt/run_full_pipeline.py "$plat" \
     --skip-crawl --skip-sync --continue-on-error >>"$LOG" 2>&1 || true
 }
 
@@ -58,13 +58,13 @@ run_import_all() {
   log "Import DB for both films…"
   for film in "${FILMS[@]}"; do
     log "import_film_mentions --film $film"
-    "$PY" -u scripts/distribution/import_film_mentions.py --film "$film" >>"$LOG" 2>&1 || true
+    "$PY" -u scripts/dis/import_film_mentions.py --film "$film" >>"$LOG" 2>&1 || true
     log "classify intent --film-slug $film"
-    "$PY" -u scripts/distribution/classify/classify_mention_intent.py \
+    "$PY" -u scripts/dis/classify/classify_mention_intent.py \
       --film-slug "$film" --reclassify >>"$LOG" 2>&1 || true
   done
   log "recompute_daily_film_metrics"
-  "$PY" -u scripts/distribution/metrics/recompute_daily_film_metrics.py >>"$LOG" 2>&1 || true
+  "$PY" -u scripts/dis/metrics/recompute_daily_film_metrics.py >>"$LOG" 2>&1 || true
 }
 
 print_db_summary() {

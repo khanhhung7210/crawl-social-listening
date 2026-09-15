@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# DIS MXH: Quý Tử Vượt Giàu + Nghỉ Hè Sợ Nghỉ Hưu
-# Platforms song song / film; 2 film tuần tự (cùng Chrome không chia được).
+# DIS MXH: platforms song song / film; 2 film tuần tự (cùng Chrome không chia được).
+# Crawl+import parallel; nếu import lỗi sẽ retry import tuần tự cuối cùng.
 set -u
 cd "$(dirname "$0")/../.."
 PY="$PWD/.venv/bin/python"
 export PYTHONPATH=src
-export SOCIAL_CONFIG_SOURCE=db
 export CHROMEDRIVER_PATH="$PWD/runtime/bin/chromedriver"
 unset PGHOST PGPORT PGDATABASE PGSCHEMA PGUSER PGPASSWORD
 mkdir -p /tmp/dis-mxh-parallel
 
-FILMS=(quy_tu_vuot_giau nghi_he_so_nghi_huu)
+FILMS=(thu_tinh_gui_ngoai conan_thien_than_sa_nga_tren_xa_lo)
 PLATFORMS=(youtube tiktok facebook instagram threads)
 
+# Seed 1 lần — tránh 5 job parallel gọi seed_films cùng lúc
 echo "[$(date +%H:%M:%S)] seed_films (once)"
-"$PY" -u scripts/distribution/seed_films.py --force-queries
+"$PY" -u scripts/dis/seed_films.py
 
 run_one() {
   local film="$1" plat="$2"
   local log="/tmp/dis-mxh-parallel/${film}__${plat}.log"
   echo "[$(date +%H:%M:%S)] START $film / $plat → $log"
-  if "$PY" -u scripts/distribution/run_distribution_pipeline.py \
+  if "$PY" -u scripts/dis/run_distribution_pipeline.py \
       --film "$film" --platform "$plat" --import-db --continue-on-error --skip-seed \
       >"$log" 2>&1
   then
@@ -37,6 +37,7 @@ for film in "${FILMS[@]}"; do
   echo "########## $(date +%H:%M:%S) film=$film — parallel platforms ##########"
   pids=()
   for plat in "${PLATFORMS[@]}"; do
+    # Skip if this platform already crawling this film (e.g. youtube left from sequential run)
     if pgrep -fl "run_distribution_pipeline.py --film $film --platform $plat" >/dev/null 2>&1; then
       echo "[$(date +%H:%M:%S)] KEEP already-running $film / $plat"
       continue
@@ -44,14 +45,14 @@ for film in "${FILMS[@]}"; do
     run_one "$film" "$plat" &
     pids+=($!)
   done
+  # Also wait for any pre-existing pipeline for this film
   fail=0
-  if ((${#pids[@]} > 0)); then
-    for pid in "${pids[@]}"; do
-      if ! wait "$pid"; then
-        fail=1
-      fi
-    done
-  fi
+  for pid in "${pids[@]:-}"; do
+    if ! wait "$pid"; then
+      fail=1
+    fi
+  done
+  # Wait leftover pre-existing processes for this film
   while pgrep -fl "run_distribution_pipeline.py --film $film " >/dev/null 2>&1; do
     echo "[$(date +%H:%M:%S)] waiting leftover pipelines for $film ..."
     sleep 15
@@ -59,17 +60,18 @@ for film in "${FILMS[@]}"; do
   echo "[$(date +%H:%M:%S)] film=$film platforms done (fail_flag=$fail)"
 done
 
+echo ""
 echo "=== retry import + classify $(date +%H:%M:%S) ==="
 for film in "${FILMS[@]}"; do
-  "$PY" -u scripts/distribution/import_film_mentions.py --film "$film" || true
-  "$PY" -u scripts/distribution/classify/classify_mention_intent.py --film-slug "$film" --reclassify || true
+  "$PY" -u scripts/dis/import_film_mentions.py --film "$film" || true
+  "$PY" -u scripts/dis/classify/classify_mention_intent.py --film-slug "$film" --reclassify || true
 done
-"$PY" -u scripts/distribution/classify/classify_mention_region.py || true
-"$PY" -u scripts/distribution/metrics/recompute_daily_film_metrics.py || true
+"$PY" -u scripts/dis/classify/classify_mention_region.py || true
+"$PY" -u scripts/dis/metrics/recompute_daily_film_metrics.py || true
 
 "$PY" - <<'PY'
 from social_listening.pg import get_connection
-films = ["quy_tu_vuot_giau", "nghi_he_so_nghi_huu"]
+films = ["thu_tinh_gui_ngoai", "conan_thien_than_sa_nga_tren_xa_lo"]
 with get_connection() as conn:
     cur = conn.cursor()
     cur.execute(

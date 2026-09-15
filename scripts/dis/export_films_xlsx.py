@@ -40,18 +40,18 @@ def load_catalog() -> dict:
 
 
 def collect_keywords(film: dict) -> list[str]:
-    rel = str(film.get("keyword_file") or f"films/{film.get('slug')}.json")
-    path = DATA_DIR / "distribution" / rel
-    if not path.exists():
+    slug = str(film.get("slug") or "").strip()
+    if not slug:
         return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    terms: list[str] = []
-    for key in ("keywords", "sub_keywords", "hashtags", "listening_keywords"):
-        for value in payload.get(key) or []:
-            term = str(value or "").strip()
-            if term and term not in terms:
-                terms.append(term)
-    return terms
+    try:
+        from social_listening.config.db_source import load_keyword_payload_from_db
+        from social_listening.keyword_config import collect_search_terms
+
+        payload = load_keyword_payload_from_db(slug)
+        return collect_search_terms(payload, include_hashtags=True)
+    except Exception:
+        title = str(film.get("title") or "").strip()
+        return [title] if title else []
 
 
 def fetch_db_rows() -> tuple[list[tuple], list[tuple]]:

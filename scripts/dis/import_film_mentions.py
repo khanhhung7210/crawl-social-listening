@@ -26,15 +26,49 @@ PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.brand_rules import detect_competitive_brands  # noqa: E402
-from social_listening.film_classify import detect_sentiment  # noqa: E402
 from social_listening.film_rules import (  # noqa: E402
     detect_film_slugs,
     film_listening_from,
     film_slug_from_path,
+    match_is_core_identifier,
 )
 from social_listening.paths import DATA_DIR  # noqa: E402
 from social_listening.pg import fetch_brand_map, get_connection  # noqa: E402
+from social_listening.processing.pipeline import process_keyword_item  # noqa: E402
+from social_listening.processing.sentiment import (  # noqa: E402
+    SENTIMENT_PROVIDER_KEYWORDS,
+    SENTIMENT_PROVIDER_NEWS_RULE,
+    apply_news_neutral,
+    detect_mention_sentiment,
+)
+from social_listening.processing.sentiment.persist import (  # noqa: E402
+    sentiment_fields_from_payload,
+)
 from social_listening.vietnam_filter import is_vietnam_relevant  # noqa: E402
+
+
+def _sentiment_for_text(
+    text: str,
+    *,
+    platform: str,
+    precomputed: dict | None = None,
+) -> tuple[str | None, str]:
+    """Shared Source B sentiment; news headlines stay neutral (DIS rule)."""
+    if platform == "news":
+        return "neutral", SENTIMENT_PROVIDER_NEWS_RULE
+    if isinstance(precomputed, dict):
+        label = precomputed.get("sentiment")
+        provider = str(precomputed.get("sentiment_provider") or SENTIMENT_PROVIDER_KEYWORDS)
+        if label in {"positive", "negative", "neutral"}:
+            return str(label), provider
+    return detect_mention_sentiment(text)
+
+
+def _merge_sentiment_metadata(meta: dict, payload: dict | None) -> tuple[float | None, dict]:
+    fields = sentiment_fields_from_payload(payload)
+    if fields["metadata_scores"]:
+        meta = {**meta, **fields["metadata_scores"]}
+    return fields["sentiment_score"], meta
 
 
 def parse_dt(value) -> datetime:
@@ -122,7 +156,7 @@ def upsert_post(cur, item: dict, platform: str) -> str:
     posted_at = parse_dt(item.get("post_created_at") or item.get("created_at"))
     url = item.get("post_url") or item.get("url") or ""
     author = item.get("page_name") or item.get("author") or item.get("author_name")
-    stats = item.get("stats") or {}
+    stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
     cur.execute(
         """
         INSERT INTO posts (
@@ -149,9 +183,9 @@ def upsert_post(cur, item: dict, platform: str) -> str:
             text,
             posted_at,
             url,
-            _int(stats.get("like_count") or stats.get("digg_count")),
+            _int(stats.get("like_count") or stats.get("digg_count") or item.get("like_count")),
             _int(stats.get("comment_count") or item.get("comment_count")),
-            _int(stats.get("view_count") or stats.get("play_count")),
+            _int(stats.get("view_count") or stats.get("play_count") or item.get("view_count")),
             json.dumps({"source": item.get("source"), "pipeline": "distribution"}, ensure_ascii=False),
         ),
     )
@@ -215,7 +249,11 @@ def resolve_films_for_text(
     path_slug: str | None,
     film_map: dict[str, str],
 ) -> tuple[list[str], str]:
-    """Link films by text/keyword detection — không gắn chỉ vì nằm trong folder crawl."""
+    """Link films by text/keyword detection — không gắn chỉ vì nằm trong folder crawl.
+
+    Person/discovery crawl keywords (e.g. "Huỳnh Lập") never assign film_id via
+    path+keyword alone — only core/title identifiers may.
+    """
     match_list = matches if isinstance(matches, list) else []
     detected = detect_film_slugs(text, match_list)
     method = "alias"
@@ -228,9 +266,8 @@ def resolve_films_for_text(
             # Text rõ ràng là phim khác — bỏ folder crawl
             method = "alias"
         else:
-            # Folder-only: chỉ chấp nhận nếu crawl keyword cũng detect đúng phim đó
-            kw_only = detect_film_slugs("", match_list)
-            if path in [s.lower() for s in kw_only]:
+            # Folder-only: only when a CORE film keyword matched (not cast/person)
+            if any(match_is_core_identifier(str(m), path) for m in match_list if m):
                 detected = [path_slug]
                 method = "path+keyword"
             else:
@@ -264,13 +301,14 @@ def upsert_mention_for_post(
         return False, 0
 
     brands = detect_competitive_brands(text, matches if isinstance(matches, list) else [])
-    # News headline ≠ audience sentiment — giữ neutral để tránh khen/chê ảo trên dashboard.
-    sentiment = "neutral" if platform == "news" else detect_sentiment(text)
-    metadata = json.dumps(
-        {"keyword_matches": matches, "pipeline": "distribution", "film_slugs": film_slugs},
-        ensure_ascii=False,
-        default=str,
-    )
+    sentiment, sentiment_provider = _sentiment_for_text(text, platform=platform, precomputed=item)
+    meta = {
+        "keyword_matches": matches,
+        "pipeline": "distribution",
+        "film_slugs": film_slugs,
+    }
+    sentiment_score, meta = _merge_sentiment_metadata(meta, item)
+    metadata = json.dumps(meta, ensure_ascii=False, default=str)
 
     cur.execute(
         """
@@ -289,27 +327,59 @@ def upsert_mention_for_post(
             """
             UPDATE mentions SET
                 content_text = %s,
-                sentiment = COALESCE(%s, sentiment),
+                sentiment = CASE
+                    WHEN sentiment_provider = 'human' THEN sentiment
+                    ELSE COALESCE(%s, sentiment)
+                END,
+                sentiment_provider = CASE
+                    WHEN sentiment_provider = 'human' THEN sentiment_provider
+                    ELSE COALESCE(%s, sentiment_provider)
+                END,
+                sentiment_score = CASE
+                    WHEN sentiment_provider = 'human' THEN sentiment_score
+                    ELSE COALESCE(%s, sentiment_score)
+                END,
                 occurred_at = COALESCE(%s, occurred_at),
                 permalink = COALESCE(%s, permalink),
                 metadata = %s::jsonb,
                 updated_at = NOW()
             WHERE mention_id = %s::uuid
             """,
-            (text or "(empty)", sentiment, occurred, permalink, metadata, mention_id),
+            (
+                text or "(empty)",
+                sentiment,
+                sentiment_provider,
+                sentiment_score,
+                occurred,
+                permalink,
+                metadata,
+                mention_id,
+            ),
         )
     else:
         cur.execute(
             """
             INSERT INTO mentions (
                 mention_kind, post_id, platform_code, author_key, content_text,
-                media_type, sentiment, sentiment_provider, occurred_at, permalink, metadata
+                media_type, sentiment, sentiment_provider, sentiment_score,
+                occurred_at, permalink, metadata
             ) VALUES (
-                'post', %s, %s, %s, %s, 'earned', %s, 'keywords', %s, %s, %s::jsonb
+                'post', %s, %s, %s, %s, 'earned', %s, %s, %s, %s, %s, %s::jsonb
             )
             RETURNING mention_id::text
             """,
-            (post_id, platform, author_key, text or "(empty)", sentiment, occurred, permalink, metadata),
+            (
+                post_id,
+                platform,
+                author_key,
+                text or "(empty)",
+                sentiment,
+                sentiment_provider,
+                sentiment_score,
+                occurred,
+                permalink,
+                metadata,
+            ),
         )
         mention_id = cur.fetchone()[0]
         inserted = True
@@ -380,7 +450,12 @@ def upsert_comment_mentions(
             ),
         )
         comment_id, inserted = cur.fetchone()
-        sentiment = detect_sentiment(text)
+        sentiment, sentiment_provider = _sentiment_for_text(
+            text, platform=platform, precomputed=c
+        )
+        meta = {"pipeline": "distribution", "film_slugs": film_slugs}
+        sentiment_score, meta = _merge_sentiment_metadata(meta, c)
+        mention_meta = json.dumps(meta, ensure_ascii=False)
 
         cur.execute(
             """
@@ -398,23 +473,44 @@ def upsert_comment_mentions(
                 """
                 UPDATE mentions SET
                     content_text = %s,
-                    sentiment = COALESCE(%s, sentiment),
+                    sentiment = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment
+                        ELSE COALESCE(%s, sentiment)
+                    END,
+                    sentiment_provider = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment_provider
+                        ELSE COALESCE(%s, sentiment_provider)
+                    END,
+                    sentiment_score = CASE
+                        WHEN sentiment_provider = 'human' THEN sentiment_score
+                        ELSE COALESCE(%s, sentiment_score)
+                    END,
                     occurred_at = COALESCE(%s, occurred_at),
                     permalink = COALESCE(%s, permalink),
+                    metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
                     updated_at = NOW()
                 WHERE mention_id = %s::uuid
                 """,
-                (text, sentiment, commented_at, c.get("url"), mention_id),
+                (
+                    text,
+                    sentiment,
+                    sentiment_provider,
+                    sentiment_score,
+                    commented_at,
+                    c.get("url"),
+                    mention_meta,
+                    mention_id,
+                ),
             )
         else:
             cur.execute(
                 """
                 INSERT INTO mentions (
                     mention_kind, post_id, comment_id, platform_code, author_key, content_text,
-                    media_type, sentiment, sentiment_provider, occurred_at, permalink,
-                    metadata
+                    media_type, sentiment, sentiment_provider, sentiment_score,
+                    occurred_at, permalink, metadata
                 ) VALUES (
-                    'comment', %s, %s, %s, %s, %s, 'earned', %s, 'keywords', %s, %s,
+                    'comment', %s, %s, %s, %s, %s, 'earned', %s, %s, %s, %s, %s,
                     %s::jsonb
                 )
                 RETURNING mention_id::text
@@ -426,9 +522,11 @@ def upsert_comment_mentions(
                     str(c.get("author") or ""),
                     text,
                     sentiment,
+                    sentiment_provider,
+                    sentiment_score,
                     commented_at,
                     c.get("url"),
-                    json.dumps({"pipeline": "distribution", "film_slugs": film_slugs}, ensure_ascii=False),
+                    mention_meta,
                 ),
             )
             mention_id = cur.fetchone()[0]
@@ -457,6 +555,17 @@ def import_file(
         platform = resolve_platform(item, path)
         if not platform or not platform_ok(platform, cur):
             continue
+        # Source B shared processing (normalize + sentiment) before DIS upsert/link
+        processed = process_keyword_item(item, platform)
+        if not processed.ok:
+            continue
+        item = processed.item
+        if platform == "news":
+            item = apply_news_neutral(item)
+            item["comments"] = [
+                apply_news_neutral(c) if isinstance(c, dict) else c
+                for c in (item.get("comments") or [])
+            ]
         post_id = upsert_post(cur, item, platform)
         inserted, linked = upsert_mention_for_post(
             cur, post_id, platform, item, brand_map, film_map, path_slug
@@ -508,12 +617,12 @@ def main() -> int:
         if not cur.fetchone():
             raise SystemExit(
                 "Table films missing. Run seed first:\n"
-                "  PYTHONPATH=src python3 scripts/distribution/seed_films.py --apply-schema"
+                "  PYTHONPATH=src python3 scripts/dis/seed_films.py --apply-schema"
             )
         brand_map = fetch_brand_map(cur)
         film_map = fetch_film_map(cur)
         if not film_map:
-            raise SystemExit("No films in DB. Run: python3 scripts/distribution/seed_films.py")
+            raise SystemExit("No films in DB. Run: python3 scripts/dis/seed_films.py")
 
         for path in files:
             p, c, linked = import_file(cur, path, brand_map, film_map)

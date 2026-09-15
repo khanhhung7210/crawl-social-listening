@@ -226,7 +226,6 @@ def seed_films(cur) -> int:
                 film.get("compare_group"),
                 json.dumps(
                     {
-                        "keyword_file": film.get("keyword_file"),
                         "aliases": film.get("aliases") or [],
                         "region_screens": region_screens.get(slug) or {},
                     },
@@ -347,7 +346,13 @@ def _term_list(raw) -> list[str]:
 
 
 def seed_movie_queries(cur, *, force: bool = False) -> int:
-    """Upsert listening_queries (query_type=movie) from data/distribution/films/*.json."""
+    """Ensure listening_queries (query_type=movie) exist for catalog films.
+
+    Keywords are managed in Dashboard Settings. Optional legacy bootstrap:
+    if data/distribution/films/<slug>.json still exists, --force-queries can
+    refresh from that file. Without a JSON file, never overwrite existing DB
+    keywords — only insert a title stub when the row is missing.
+    """
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     n = 0
     for film in catalog.get("films") or []:
@@ -359,10 +364,30 @@ def seed_movie_queries(cur, *, force: bool = False) -> int:
         rel = str(film.get("keyword_file") or f"films/{slug}.json")
         path = DATA_DIR / "distribution" / rel
         payload: dict = {}
-        if path.exists():
+        has_file = path.exists()
+        if has_file:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 payload = loaded
+
+        cur.execute(
+            """
+            SELECT query_id::text
+            FROM listening_queries
+            WHERE query_type = 'movie'
+              AND metadata->>'film_slug' = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (slug,),
+        )
+        row = cur.fetchone()
+        if row and not (force and has_file):
+            if force and not has_file:
+                print(f"  movie query {slug}: keep DB keywords (no films/*.json)")
+            else:
+                print(f"  movie query {slug}: already exists (skip)")
+            continue
 
         keywords = _term_list(payload.get("keywords")) or [title]
         hashtags = _term_list(payload.get("hashtags"))
@@ -401,22 +426,6 @@ def seed_movie_queries(cur, *, force: bool = False) -> int:
         meta_json = json.dumps(meta, ensure_ascii=False)
         is_active = bool(film.get("active", True))
 
-        cur.execute(
-            """
-            SELECT query_id::text
-            FROM listening_queries
-            WHERE query_type = 'movie'
-              AND metadata->>'film_slug' = %s
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (slug,),
-        )
-        row = cur.fetchone()
-        if row and not force:
-            print(f"  movie query {slug}: already exists (skip)")
-            continue
-
         if row:
             cur.execute(
                 """
@@ -441,7 +450,8 @@ def seed_movie_queries(cur, *, force: bool = False) -> int:
                 """,
                 (title, kw_json, ht_json, platforms_json, meta_json, is_active),
             )
-        print(f"  movie query {slug}: OK ({len(keywords)} keywords)")
+        src = "file" if has_file else "title-stub"
+        print(f"  movie query {slug}: OK ({len(keywords)} keywords, {src})")
         n += 1
     return n
 
@@ -503,7 +513,7 @@ def run_seed(args: argparse.Namespace) -> None:
                 raise SystemExit(
                     "Table films missing. Run:\n"
                     f"  psql -d galaxy_social_listening -f {SCHEMA}\n"
-                    "or: PYTHONPATH=src python3 scripts/distribution/seed_films.py --apply-schema"
+                    "or: PYTHONPATH=src python3 scripts/dis/seed_films.py --apply-schema"
                 )
 
             print(f"Catalog: {CATALOG}")
@@ -572,7 +582,7 @@ def main() -> int:
     parser.add_argument(
         "--force-queries",
         action="store_true",
-        help="Refresh listening_queries movie rows from films/*.json even if already seeded",
+        help="Refresh listening_queries from films/*.json if present (never wipe DB when JSON missing)",
     )
     args = parser.parse_args()
 

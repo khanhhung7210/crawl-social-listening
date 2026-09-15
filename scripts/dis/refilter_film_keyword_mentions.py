@@ -2,10 +2,10 @@
 """Re-apply Distribution film_rules on existing *_keyword_mentions.json (no re-crawl).
 
 Examples:
-  PYTHONPATH=src python3 scripts/distribution/refilter_film_keyword_mentions.py \\
+  PYTHONPATH=src python3 scripts/dis/refilter_film_keyword_mentions.py \\
     --film nghi_he_so_nghi_huu quy_tu_vuot_giau
 
-  PYTHONPATH=src python3 scripts/distribution/refilter_film_keyword_mentions.py --all-active
+  PYTHONPATH=src python3 scripts/dis/refilter_film_keyword_mentions.py --all-active
 """
 
 from __future__ import annotations

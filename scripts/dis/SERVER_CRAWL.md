@@ -23,7 +23,7 @@ source .venv/bin/activate
 export PYTHONPATH=src
 
 # Thêm bảng films/… nếu chưa có + seed 5 phim active
-python3 scripts/distribution/seed_films.py --apply-schema
+python3 scripts/dis/seed_films.py --apply-schema
 ```
 
 Phim active hiện tại: The Odyssey · Ám · Người Nhện · Nghỉ Hè · Minion  
@@ -35,13 +35,13 @@ Phim active hiện tại: The Odyssey · Ám · Người Nhện · Nghỉ Hè ·
 
 ```bash
 export PYTHONPATH=src
-python3 scripts/distribution/run_by_platform.py --list
+python3 scripts/dis/run_by_platform.py --list
 
-python3 scripts/distribution/run_by_platform.py tiktok --chrome-only
-python3 scripts/distribution/run_by_platform.py youtube --chrome-only
-python3 scripts/distribution/run_by_platform.py facebook --chrome-only
-python3 scripts/distribution/run_by_platform.py instagram --chrome-only
-python3 scripts/distribution/run_by_platform.py threads --chrome-only
+python3 scripts/dis/run_by_platform.py tiktok --chrome-only
+python3 scripts/dis/run_by_platform.py youtube --chrome-only
+python3 scripts/dis/run_by_platform.py facebook --chrome-only
+python3 scripts/dis/run_by_platform.py instagram --chrome-only
+python3 scripts/dis/run_by_platform.py threads --chrome-only
 ```
 
 Hoặc tay:
@@ -60,10 +60,10 @@ Hoặc tay:
 
 ```bash
 # News — buzz có ngay, không cần Chrome
-PYTHONPATH=src python3 scripts/distribution/run_dis_full_sync.py --days 90
+PYTHONPATH=src python3 scripts/dis/run_dis_full_sync.py --days 90
 
 # 1 platform / all 5 phim active
-PYTHONPATH=src python3 scripts/distribution/run_by_platform.py tiktok \
+PYTHONPATH=src python3 scripts/dis/run_by_platform.py tiktok \
   --all-active --import-db --continue-on-error
 ```
 
@@ -76,28 +76,28 @@ cd social-listening && source .venv/bin/activate && export PYTHONPATH=src
 
 # Terminal A — News
 while true; do
-  python3 scripts/distribution/run_dis_full_sync.py --days 90
+  python3 scripts/dis/run_dis_full_sync.py --days 90
   sleep 300
 done
 
 # Terminal B — TikTok :9233
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform tiktok --import-db --sleep 180 --continue-on-error
 
 # Terminal C — YouTube :9235
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform youtube --import-db --sleep 180 --continue-on-error
 
 # Terminal D — Facebook :9236
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform facebook --import-db --sleep 180 --continue-on-error
 
 # Terminal E — Instagram :9234
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform instagram --import-db --sleep 180 --continue-on-error
 
 # Terminal F — Threads :9232
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform threads --import-db --sleep 180 --continue-on-error
 ```
 

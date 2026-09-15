@@ -25,8 +25,8 @@ while quy_running; do
   log "  still running: $(pgrep -fl 'quy_tu_vuot_giau' 2>/dev/null | wc -l | tr -d ' ') process(es)"
 done
 log "Quý Tử Vượt Giàu done — import + metrics"
-"$PY" -u scripts/distribution/import_film_mentions.py --film quy_tu_vuot_giau >>"$LOG" 2>&1 || true
-"$PY" -u scripts/distribution/classify/classify_mention_intent.py --film-slug quy_tu_vuot_giau --reclassify >>"$LOG" 2>&1 || true
+"$PY" -u scripts/dis/import_film_mentions.py --film quy_tu_vuot_giau >>"$LOG" 2>&1 || true
+"$PY" -u scripts/dis/classify/classify_mention_intent.py --film-slug quy_tu_vuot_giau --reclassify >>"$LOG" 2>&1 || true
 
 FILM="nghi_he_so_nghi_huu"
 PLATFORMS=(youtube tiktok facebook instagram threads)
@@ -36,7 +36,7 @@ pids=()
 for plat in "${PLATFORMS[@]}"; do
   out="$PARALLEL_DIR/${FILM}__${plat}.log"
   log "START $FILM / $plat → $out"
-  "$PY" -u scripts/distribution/run_distribution_pipeline.py \
+  "$PY" -u scripts/dis/run_distribution_pipeline.py \
     --film "$FILM" --platform "$plat" --import-db --continue-on-error --skip-seed \
     >"$out" 2>&1 &
   pids+=($!)
@@ -49,8 +49,8 @@ done
 log "film=$FILM platforms done (fail_flag=$fail)"
 
 log "import + classify + metrics for $FILM"
-"$PY" -u scripts/distribution/import_film_mentions.py --film "$FILM" >>"$LOG" 2>&1 || true
-"$PY" -u scripts/distribution/classify/classify_mention_intent.py --film-slug "$FILM" --reclassify >>"$LOG" 2>&1 || true
-"$PY" -u scripts/distribution/metrics/recompute_daily_film_metrics.py >>"$LOG" 2>&1 || true
+"$PY" -u scripts/dis/import_film_mentions.py --film "$FILM" >>"$LOG" 2>&1 || true
+"$PY" -u scripts/dis/classify/classify_mention_intent.py --film-slug "$FILM" --reclassify >>"$LOG" 2>&1 || true
+"$PY" -u scripts/dis/metrics/recompute_daily_film_metrics.py >>"$LOG" 2>&1 || true
 
 log "=== ALL DONE ==="

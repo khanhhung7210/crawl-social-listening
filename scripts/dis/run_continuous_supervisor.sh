@@ -62,7 +62,7 @@ start_worker() {
   clear_stale_lock "$film" "$plat"
 
   nohup env PYTHONPATH=src SOCIAL_CONFIG_SOURCE=db CHROMEDRIVER_PATH="$CHROMEDRIVER_PATH" \
-    "$PY" -u scripts/distribution/run_continuous_distribution.py \
+    "$PY" -u scripts/dis/run_continuous_distribution.py \
     --film "$film" --platform "$plat" --import-db --continue-on-error --skip-seed \
     --sleep "$SLEEP_ROUNDS" >>"$logfile" 2>&1 &
   local pid=$!
@@ -71,12 +71,12 @@ start_worker() {
 }
 
 ensure_chrome() {
-  "$PY" scripts/distribution/run_by_platform.py status >/dev/null 2>&1 || true
+  "$PY" scripts/dis/run_by_platform.py status >/dev/null 2>&1 || true
 }
 
 log "Supervisor start — films=${FILMS[*]} platforms=${PLATFORMS[*]}"
 log "Seed once…"
-"$PY" -u scripts/distribution/seed_films.py --apply-schema >>"$LOG_DIR/supervisor.log" 2>&1 || true
+"$PY" -u scripts/dis/seed_films.py --apply-schema >>"$LOG_DIR/supervisor.log" 2>&1 || true
 ensure_chrome
 
 while true; do

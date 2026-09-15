@@ -94,17 +94,11 @@ def fetch_rss(query: str, days: int) -> list[dict]:
     return items
 
 
-def resolve_keyword_file(film: dict) -> Path:
-    rel = str(film.get("keyword_file") or f"films/{film['slug']}.json")
-    return DATA_DIR / "distribution" / rel
-
-
 def crawl_film(film: dict, days: int) -> tuple[Path, int]:
     slug = str(film.get("slug") or "").strip()
-    kw_path = resolve_keyword_file(film)
-    if not kw_path.exists():
-        raise FileNotFoundError(kw_path)
-    terms = collect_search_terms(load_keyword_payload(kw_path), include_hashtags=False)
+    os.environ["SOCIAL_LISTENING_PROFILE"] = "dis"
+    os.environ["SOCIAL_FILM_SLUG"] = slug
+    terms = collect_search_terms(load_keyword_payload(), include_hashtags=False)
     # Prefer title + primary keywords first
     title = str(film.get("title") or "").strip()
     if title and title not in terms:
@@ -197,7 +191,7 @@ def main() -> int:
         for film in films:
             slug = film.get("slug")
             subprocess.run(
-                [sys.executable, str(PROJECT_ROOT / "scripts/distribution/import_film_mentions.py"), "--film", slug],
+                [sys.executable, str(PROJECT_ROOT / "scripts/dis/import_film_mentions.py"), "--film", slug],
                 cwd=str(PROJECT_ROOT),
                 env={
                     **os.environ,

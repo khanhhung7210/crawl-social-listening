@@ -12,13 +12,13 @@ FILMS=(am_chuoi_phim_ngan_linh_di nghi_he_so_nghi_huu)
 PLATFORMS=(youtube tiktok facebook instagram threads)
 
 echo "[$(date +%H:%M:%S)] seed_films (once)"
-"$PY" -u scripts/distribution/seed_films.py
+"$PY" -u scripts/dis/seed_films.py
 
 run_one() {
   local film="$1" plat="$2"
   local log="/tmp/dis-mxh-parallel/${film}__${plat}.log"
   echo "[$(date +%H:%M:%S)] START $film / $plat → $log"
-  if "$PY" -u scripts/distribution/run_distribution_pipeline.py \
+  if "$PY" -u scripts/dis/run_distribution_pipeline.py \
       --film "$film" --platform "$plat" --import-db --continue-on-error --skip-seed \
       >"$log" 2>&1
   then
@@ -47,7 +47,7 @@ done
 
 echo "=== reclassify + metrics $(date +%H:%M:%S) ==="
 for film in "${FILMS[@]}" conan_thien_than_sa_nga_tren_xa_lo; do
-  "$PY" -u scripts/distribution/classify/classify_mention_intent.py --film-slug "$film" --reclassify || true
+  "$PY" -u scripts/dis/classify/classify_mention_intent.py --film-slug "$film" --reclassify || true
 done
 "$PY" -u - <<'PY'
 from social_listening.pg import get_connection
@@ -89,5 +89,5 @@ with get_connection() as conn:
     print('=== inventory khen/che 30d ===')
     for r in cur.fetchall(): print(r)
 PY
-"$PY" -u scripts/distribution/metrics/recompute_daily_film_metrics.py || true
+"$PY" -u scripts/dis/metrics/recompute_daily_film_metrics.py || true
 echo "=== ALL DONE $(date +%H:%M:%S) ==="

@@ -4,10 +4,10 @@
 Treo 1 terminal / platform. Ctrl+C để dừng.
 
 Examples:
-  PYTHONPATH=src python3 scripts/distribution/run_continuous_distribution.py \\
+  PYTHONPATH=src python3 scripts/dis/run_continuous_distribution.py \\
     --film 28_years_later_the_bone_temple --platform tiktok --import-db
 
-  PYTHONPATH=src python3 scripts/distribution/run_continuous_distribution.py \\
+  PYTHONPATH=src python3 scripts/dis/run_continuous_distribution.py \\
     --all-active --platform facebook --import-db --sleep 180
 """
 
@@ -112,8 +112,8 @@ def main() -> int:
         raise SystemExit(
             "Đừng dùng --platform all cho continuous. "
             "Treo 1 terminal / platform cho nhanh, ví dụ:\n"
-            "  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py tiktok --all-active --continuous\n"
-            "  PYTHONPATH=src python3 scripts/distribution/run_by_platform.py youtube --all-active --continuous"
+            "  PYTHONPATH=src python3 scripts/dis/run_by_platform.py tiktok --all-active --continuous\n"
+            "  PYTHONPATH=src python3 scripts/dis/run_by_platform.py youtube --all-active --continuous"
         )
 
     # Lock theo platform để chạy song song nhiều terminal

@@ -1,9 +1,9 @@
-# scripts/distribution — crawl phim → Postgres (như MKT)
+# scripts/dis — crawl phim → Postgres (như MKT)
 
 Pipeline thật, không chỉ config JSON:
 
 ```text
-keyword films/*.json
+keywords từ DB (listening_queries movie / Dashboard Settings)
   → platform runners (FB/IG/Threads/TikTok/YT)  ← chạy TÁCH từng platform
   → *_keyword_mentions.json
   → import_film_mentions.py  (posts/comments/mentions + mention_films)
@@ -28,18 +28,18 @@ source .venv/bin/activate
 export PYTHONPATH=src
 
 # Xem port / Chrome đang lên chưa
-python3 scripts/distribution/run_by_platform.py --list
+python3 scripts/dis/run_by_platform.py --list
 
 # Terminal 1 — TikTok
-python3 scripts/distribution/run_by_platform.py tiktok --chrome-only
+python3 scripts/dis/run_by_platform.py tiktok --chrome-only
 # (login TikTok trong cửa sổ Chrome vừa mở)
-python3 scripts/distribution/run_by_platform.py tiktok --all-active --import-db --continue-on-error
+python3 scripts/dis/run_by_platform.py tiktok --all-active --import-db --continue-on-error
 
 # Terminal 2 — YouTube (song song)
-python3 scripts/distribution/run_by_platform.py youtube --all-active --import-db --continue-on-error
+python3 scripts/dis/run_by_platform.py youtube --all-active --import-db --continue-on-error
 
 # Treo liên tục 1 platform
-python3 scripts/distribution/run_by_platform.py tiktok --all-active --continuous --sleep 180
+python3 scripts/dis/run_by_platform.py tiktok --all-active --continuous --sleep 180
 ```
 
 **Tránh** `--platform all` — sẽ chạy tuần tự rất chậm.
@@ -52,14 +52,14 @@ source .venv/bin/activate
 export PYTHONPATH=src
 
 # Seed schema + catalog phim vào DB
-python3 scripts/distribution/seed_films.py --apply-schema
+python3 scripts/dis/seed_films.py --apply-schema
 
 # Crawl 1 phim + 1 platform + import DB + metrics
-python3 scripts/distribution/run_distribution_pipeline.py \
+python3 scripts/dis/run_distribution_pipeline.py \
   --film the_odyssey --platform tiktok --import-db
 
 # Nhiều phim active, vẫn 1 platform
-python3 scripts/distribution/run_distribution_pipeline.py \
+python3 scripts/dis/run_distribution_pipeline.py \
   --all-active --platform facebook --import-db --continue-on-error
 ```
 
@@ -68,10 +68,10 @@ Cần Chrome debug đã login (port theo bảng trên). `run_by_platform.py` s�
 ## Continuous (treo terminal)
 
 ```bash
-python3 scripts/distribution/run_continuous_distribution.py \
+python3 scripts/dis/run_continuous_distribution.py \
   --all-active --platform tiktok --import-db --sleep 180
 # hoặc
-python3 scripts/distribution/run_by_platform.py tiktok --all-active --continuous
+python3 scripts/dis/run_by_platform.py tiktok --all-active --continuous
 ```
 
 Lock theo `logs/continuous-locks/dis-<film|all>-<platform>.lock` → nhiều terminal song song được.
@@ -100,13 +100,13 @@ source .venv/bin/activate
 export PYTHONPATH=src
 
 # Crawl suất chiếu Galaxy theo vùng + classify region/intent
-python3 scripts/distribution/crawl/crawl_heatmap_data.py --all-active --seed-db
+python3 scripts/dis/crawl/crawl_heatmap_data.py --all-active --seed-db
 
 # Chỉ screens 1 phim (không ghi DB classify)
-python3 scripts/distribution/crawl/crawl_region_screens.py --film the_odyssey --seed-db
+python3 scripts/dis/crawl/crawl_region_screens.py --film the_odyssey --seed-db
 
 # Full market (mọi cụm rạp), đếm số rạp thay vì suất
-python3 scripts/distribution/crawl/crawl_region_screens.py --all-active --chain all --metric cinemas
+python3 scripts/dis/crawl/crawl_region_screens.py --all-active --chain all --metric cinemas
 ```
 
 | Hàng heatmap | Nguồn |

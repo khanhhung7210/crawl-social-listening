@@ -4,8 +4,8 @@
 Dùng chung rule với crawl + dashboard (social_listening.dis_regions).
 
 Ví dụ:
-  PYTHONPATH=src python3 scripts/distribution/classify/classify_mention_region.py
-  PYTHONPATH=src python3 scripts/distribution/classify/classify_mention_region.py --film-slug the_odyssey
+  PYTHONPATH=src python3 scripts/dis/classify/classify_mention_region.py
+  PYTHONPATH=src python3 scripts/dis/classify/classify_mention_region.py --film-slug the_odyssey
 """
 
 from __future__ import annotations
