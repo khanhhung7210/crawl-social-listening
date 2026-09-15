@@ -121,7 +121,7 @@ def chrome_debugger_ready(address: str | None = None, timeout: float = 2.0) -> d
     return None
 
 
-def _chrome_bin() -> str:
+def resolve_chrome_bin() -> str:
     env = (os.getenv("CHROME_BIN") or "").strip()
     if env and Path(env).is_file():
         return env
@@ -148,6 +148,10 @@ def _chrome_bin() -> str:
     raise RuntimeError("Không tìm thấy Google Chrome. Cài Chrome hoặc set CHROME_BIN.")
 
 
+# Back-compat for runners that import private name
+_chrome_bin = resolve_chrome_bin
+
+
 def ensure_debug_chrome(address: str | None = None) -> dict:
     """Attach to existing debug Chrome, or start a dedicated profile on 9227."""
     addr = address or debugger_address()
@@ -160,7 +164,7 @@ def ensure_debug_chrome(address: str | None = None) -> dict:
     port = int(port_s)
     user_data = Path(os.getenv("GOOGLE_MAPS_CHROME_USER_DATA") or _DEFAULT_USER_DATA)
     user_data.mkdir(parents=True, exist_ok=True)
-    chrome = _chrome_bin()
+    chrome = resolve_chrome_bin()
     cmd = [
         chrome,
         f"--remote-debugging-port={port}",

@@ -47,7 +47,7 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chromedriver_path
+from social_listening.chromedriver_utils import chrome_debugger_ready, resolve_chrome_bin, resolve_chromedriver_path
 from social_listening.crawl_freshness import (
     KeywordCrawlStats,
     load_freshness_policy,
@@ -659,9 +659,7 @@ def ensure_threads_debug_chrome() -> None:
     host, port_text = DEBUGGER_ADDRESS.rsplit(":", 1)
     profile_dir = threads_chrome_profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
-    chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if not Path(chrome_bin).is_file():
-        raise RuntimeError(f"Google Chrome not found at {chrome_bin}")
+    chrome_bin = resolve_chrome_bin()
 
     cmd = [
         chrome_bin,
@@ -703,7 +701,7 @@ def build_driver() -> webdriver.Chrome:
             raise RuntimeError(
                 "Cannot connect to Chrome remote debugging at "
                 f"{DEBUGGER_ADDRESS}. Start Chrome first with:\n"
-                "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome "
+                f"{resolve_chrome_bin()} "
                 "--remote-debugging-port=9222 --remote-allow-origins=* "
                 f"--user-data-dir={threads_chrome_profile_dir()}"
             ) from exc

@@ -11,6 +11,7 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
 set "PY=py -3"
+set "CHROMEDRIVER_PATH="
 
 if "%~1"=="" (
   echo [ERROR] Thieu platform

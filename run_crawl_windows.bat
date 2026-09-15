@@ -15,6 +15,13 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
 set "PY=py -3"
+REM Mac chromedriver trong repo gay WinError 193 tren Windows
+set "CHROMEDRIVER_PATH="
+if exist "runtime\bin\chromedriver" (
+  echo [WARN] Tim thay runtime\bin\chromedriver — neu la binary Mac hay xoa:
+  echo        del runtime\bin\chromedriver
+  echo.
+)
 
 where py >nul 2>&1
 if errorlevel 1 (

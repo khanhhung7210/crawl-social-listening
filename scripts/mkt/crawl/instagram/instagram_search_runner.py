@@ -44,7 +44,7 @@ from social_listening.keyword_config import collect_search_terms, load_keyword_p
 from social_listening.film_paths import platform_raw_dir
 from social_listening.paths import ensure_dir
 from social_listening.crawl_state import IncrementalCrawlState
-from social_listening.chromedriver_utils import chrome_debugger_ready, leave_chrome_open
+from social_listening.chromedriver_utils import chrome_debugger_ready, leave_chrome_open, resolve_chrome_bin
 from social_listening.crawl_freshness import KeywordCrawlStats, load_freshness_policy
 from social_listening.crawl_reliability import (
     CrawlHeartbeat,
@@ -520,9 +520,7 @@ def ensure_instagram_debug_chrome() -> None:
     host, port_text = DEBUGGER_ADDRESS.rsplit(":", 1)
     profile_dir = instagram_chrome_profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
-    chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if not Path(chrome_bin).is_file():
-        raise RuntimeError(f"Google Chrome not found at {chrome_bin}")
+    chrome_bin = resolve_chrome_bin()
     cmd = [
         chrome_bin,
         f"--remote-debugging-port={port_text}",
