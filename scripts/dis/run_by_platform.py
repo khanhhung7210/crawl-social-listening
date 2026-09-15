@@ -92,10 +92,14 @@ def env_base(platform: str | None = None) -> dict[str, str]:
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
-    # DIS chromedriver (không đụng runner MKT) — ưu tiên binary sạch trong runtime/bin
-    dis_driver = PROJECT_ROOT / "runtime" / "bin" / "chromedriver"
-    if dis_driver.is_file():
-        env["CHROMEDRIVER_PATH"] = str(dis_driver)
+    # DIS chromedriver — only if binary matches this OS (Mac binary → WinError 193 on Windows)
+    from social_listening.chromedriver_utils import resolve_chromedriver_path
+
+    driver = resolve_chromedriver_path()
+    if driver:
+        env["CHROMEDRIVER_PATH"] = driver
+    else:
+        env.pop("CHROMEDRIVER_PATH", None)
     # Always export all DIS ports; runners read their own key
     env["THREADS_DEBUGGER_ADDRESS"] = "127.0.0.1:9232"
     env["TIKTOK_DEBUGGER_ADDRESS"] = "127.0.0.1:9233"

@@ -1,4 +1,5 @@
 .venv/
+.pip_packages/
 .env
 .env.bak*
 __pycache__/
@@ -12,6 +13,9 @@ tmp_*
 /runtime/chrome/
 /runtime/chrome-crash/
 /runtime/logs/
+/runtime/models/
+/runtime/bin/chromedriver
+/runtime/bin/chromedriver.exe
 .claude/
 
 # Local ops dumps / backfill recovery artifacts — do not push

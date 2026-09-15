@@ -16,36 +16,91 @@ from selenium.webdriver.chrome.options import Options
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RUNTIME_DRIVER = _PROJECT_ROOT / "runtime" / "bin" / "chromedriver"
+_RUNTIME_DRIVER_EXE = _PROJECT_ROOT / "runtime" / "bin" / "chromedriver.exe"
 _DEFAULT_USER_DATA = Path("/tmp/chrome-codex-google-maps")
 _DEFAULT_DEBUGGER = "127.0.0.1:9227"
 
 
-def resolve_chromedriver_path() -> str:
-    env = (os.getenv("CHROMEDRIVER_PATH") or "").strip()
-    if env and Path(env).is_file():
-        return env
-    # Skip bundled runtime driver on Windows — often stale vs installed Chrome.
-    if os.name != "nt" and _RUNTIME_DRIVER.is_file():
-        return str(_RUNTIME_DRIVER)
+def _chromedriver_usable(path: Path) -> bool:
+    """Reject Mac/Linux binaries on Windows (WinError 193) and missing files."""
+    if not path.is_file():
+        return False
+    try:
+        with path.open("rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        return False
+    if os.name == "nt":
+        # PE executable (chromedriver.exe)
+        return magic[:2] == b"MZ"
+    # ELF or Mach-O (incl. 64-bit / fat)
+    return magic[:4] in {
+        b"\x7fELF",
+        b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64 le
+        b"\xfe\xed\xfa\xcf",  # MH_CIGAM_64
+        b"\xce\xfa\xed\xfe",  # MH_MAGIC le
+        b"\xfe\xed\xfa\xce",
+        b"\xca\xfe\xba\xbe",  # fat
+        b"\xbe\xba\xfe\xca",
+    }
 
-    roots = [
-        Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac-arm64",
-        Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac64",
-        Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac-x64",
-    ]
-    patterns = (
-        "*/chromedriver-mac-arm64/chromedriver",
-        "*/chromedriver-mac-x64/chromedriver",
-        "*/chromedriver/chromedriver",
-    )
-    for cache_root in roots:
+
+def resolve_chromedriver_path() -> str:
+    """Return a chromedriver path for this OS, or '' to let Selenium Manager pick."""
+    candidates: list[Path] = []
+
+    env = (os.getenv("CHROMEDRIVER_PATH") or "").strip()
+    if env:
+        candidates.append(Path(env))
+
+    if os.name == "nt":
+        candidates.append(_RUNTIME_DRIVER_EXE)
+        # Bare "chromedriver" in repo is usually a Mac binary — only keep if PE.
+        candidates.append(_RUNTIME_DRIVER)
+        which = shutil.which("chromedriver.exe") or shutil.which("chromedriver")
+        if which:
+            candidates.append(Path(which))
+        wdm_roots = [
+            Path.home() / ".wdm" / "drivers" / "chromedriver" / "win64",
+            Path.home() / ".wdm" / "drivers" / "chromedriver" / "win32",
+        ]
+        wdm_patterns = (
+            "*/chromedriver-win64/chromedriver.exe",
+            "*/chromedriver-win32/chromedriver.exe",
+            "*/chromedriver.exe",
+        )
+    else:
+        candidates.append(_RUNTIME_DRIVER)
+        which = shutil.which("chromedriver")
+        if which:
+            candidates.append(Path(which))
+        wdm_roots = [
+            Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac-arm64",
+            Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac64",
+            Path.home() / ".wdm" / "drivers" / "chromedriver" / "mac-x64",
+        ]
+        wdm_patterns = (
+            "*/chromedriver-mac-arm64/chromedriver",
+            "*/chromedriver-mac-x64/chromedriver",
+            "*/chromedriver/chromedriver",
+        )
+
+    for cache_root in wdm_roots:
         if not cache_root.exists():
             continue
-        for pattern in patterns:
-            candidates = sorted(cache_root.glob(pattern), reverse=True)
-            for candidate in candidates:
-                if candidate.is_file():
-                    return str(candidate)
+        for pattern in wdm_patterns:
+            candidates.extend(sorted(cache_root.glob(pattern), reverse=True))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _chromedriver_usable(candidate):
+            return key
+
+    # Empty → Selenium Manager downloads the correct driver for installed Chrome.
     return ""
 
 
