@@ -867,14 +867,14 @@ def main() -> int:
 
         spec = importlib.util.spec_from_file_location(
             "recompute_daily_brand_metrics",
-            PROJECT_ROOT / "scripts" / "marketing" / "metrics" / "recompute_daily_brand_metrics.py",
+            PROJECT_ROOT / "scripts" / "mkt" / "metrics" / "recompute_daily_brand_metrics.py",
         )
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
             old_argv = sys.argv[:]
             try:
                 # Avoid leaking importer flags (--film/--file) into metrics CLI.
-                sys.argv = [str(PROJECT_ROOT / "scripts" / "marketing" / "metrics" / "recompute_daily_brand_metrics.py")]
+                sys.argv = [str(PROJECT_ROOT / "scripts" / "mkt" / "metrics" / "recompute_daily_brand_metrics.py")]
                 spec.loader.exec_module(mod)
                 mod.main()
             finally:
@@ -887,14 +887,14 @@ def main() -> int:
 
         spec = importlib.util.spec_from_file_location(
             "build_campaign_tracking",
-            PROJECT_ROOT / "scripts" / "marketing" / "classify" / "build_campaign_tracking.py",
+            PROJECT_ROOT / "scripts" / "mkt" / "classify" / "build_campaign_tracking.py",
         )
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
             old_argv = sys.argv[:]
             try:
                 sys.argv = [
-                    str(PROJECT_ROOT / "scripts" / "marketing" / "classify" / "build_campaign_tracking.py"),
+                    str(PROJECT_ROOT / "scripts" / "mkt" / "classify" / "build_campaign_tracking.py"),
                     "--brand",
                     "glx",
                 ]

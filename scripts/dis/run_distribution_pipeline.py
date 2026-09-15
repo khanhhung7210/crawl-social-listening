@@ -38,11 +38,11 @@ def _project_root() -> Path:
 
 PROJECT_ROOT = _project_root()
 CATALOG_PATH = PROJECT_ROOT / "data" / "distribution" / "film_catalog.json"
-PIPELINE = PROJECT_ROOT / "scripts" / "marketing" / "run_full_pipeline.py"
-SEED = PROJECT_ROOT / "scripts" / "distribution" / "seed_films.py"
-IMPORT = PROJECT_ROOT / "scripts" / "distribution" / "import_film_mentions.py"
-INTENT = PROJECT_ROOT / "scripts" / "distribution" / "classify" / "classify_mention_intent.py"
-METRICS = PROJECT_ROOT / "scripts" / "distribution" / "metrics" / "recompute_daily_film_metrics.py"
+PIPELINE = PROJECT_ROOT / "scripts" / "mkt" / "run_full_pipeline.py"
+SEED = PROJECT_ROOT / "scripts" / "dis" / "seed_films.py"
+IMPORT = PROJECT_ROOT / "scripts" / "dis" / "import_film_mentions.py"
+INTENT = PROJECT_ROOT / "scripts" / "dis" / "classify" / "classify_mention_intent.py"
+METRICS = PROJECT_ROOT / "scripts" / "dis" / "metrics" / "recompute_daily_film_metrics.py"
 SCHEMA = PROJECT_ROOT / "sql" / "galaxy_dis_schema.sql"
 
 

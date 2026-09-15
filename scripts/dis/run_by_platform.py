@@ -37,8 +37,8 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
-PIPELINE = PROJECT_ROOT / "scripts" / "distribution" / "run_distribution_pipeline.py"
-CONTINUOUS = PROJECT_ROOT / "scripts" / "distribution" / "run_continuous_distribution.py"
+PIPELINE = PROJECT_ROOT / "scripts" / "dis" / "run_distribution_pipeline.py"
+CONTINUOUS = PROJECT_ROOT / "scripts" / "dis" / "run_continuous_distribution.py"
 
 
 def _resolve_chrome_bin() -> Path:

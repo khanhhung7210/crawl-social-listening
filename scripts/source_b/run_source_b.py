@@ -24,7 +24,7 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
-IMPORT = PROJECT_ROOT / "scripts" / "shared" / "import_keyword_mentions.py"
+IMPORT = PROJECT_ROOT / "scripts" / "source_b" / "import_keyword_mentions.py"
 
 
 def main() -> int:

@@ -226,7 +226,7 @@ def main() -> int:
     if args.seed_db and args.write:
         import subprocess
 
-        seed = PROJECT_ROOT / "scripts" / "distribution" / "seed_films.py"
+        seed = PROJECT_ROOT / "scripts" / "dis" / "seed_films.py"
         subprocess.run([sys.executable, str(seed)], check=True)
 
     return 0

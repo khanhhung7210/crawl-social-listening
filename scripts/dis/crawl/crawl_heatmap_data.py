@@ -31,7 +31,7 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
-DIS = PROJECT_ROOT / "scripts" / "distribution"
+DIS = PROJECT_ROOT / "scripts" / "dis"
 
 
 def _dis_script(name: str) -> Path:

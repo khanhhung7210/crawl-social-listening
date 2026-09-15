@@ -32,12 +32,12 @@ def _project_root() -> Path:
 PROJECT_ROOT = _project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-PIPELINE = PROJECT_ROOT / "scripts" / "distribution" / "run_distribution_pipeline.py"
-SEED = PROJECT_ROOT / "scripts" / "distribution" / "seed_films.py"
+PIPELINE = PROJECT_ROOT / "scripts" / "dis" / "run_distribution_pipeline.py"
+SEED = PROJECT_ROOT / "scripts" / "dis" / "seed_films.py"
 LOCK_DIR = PROJECT_ROOT / "logs" / "continuous-locks"
-CLASSIFY = PROJECT_ROOT / "scripts" / "distribution" / "classify" / "classify_mention_intent.py"
-METRICS = PROJECT_ROOT / "scripts" / "distribution" / "metrics" / "recompute_daily_film_metrics.py"
-NEWS_SYNC = PROJECT_ROOT / "scripts" / "distribution" / "run_dis_full_sync.py"
+CLASSIFY = PROJECT_ROOT / "scripts" / "dis" / "classify" / "classify_mention_intent.py"
+METRICS = PROJECT_ROOT / "scripts" / "dis" / "metrics" / "recompute_daily_film_metrics.py"
+NEWS_SYNC = PROJECT_ROOT / "scripts" / "dis" / "run_dis_full_sync.py"
 
 
 def log(msg: str) -> None:

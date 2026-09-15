@@ -41,17 +41,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from social_listening.subprocess_utils import run_streaming  # noqa: E402
 
-PIPELINE = PROJECT_ROOT / "scripts" / "marketing" / "run_full_pipeline.py"
+PIPELINE = PROJECT_ROOT / "scripts" / "mkt" / "run_full_pipeline.py"
 LOCK_DIR = PROJECT_ROOT / "logs" / "continuous-locks"
-NEWS_CRAWL = PROJECT_ROOT / "scripts" / "marketing" / "crawl" / "news" / "crawl_news_mentions.py"
+NEWS_CRAWL = PROJECT_ROOT / "scripts" / "mkt" / "crawl" / "news" / "crawl_news_mentions.py"
 NEWS_FILE = PROJECT_ROOT / "data" / "news" / "processed" / "galaxy_cinema" / "news_keyword_mentions.json"
-APP_CRAWL = PROJECT_ROOT / "scripts" / "marketing" / "crawl" / "reviews" / "crawl_app_reviews.py"
-APP_IMPORT = PROJECT_ROOT / "scripts" / "shared" / "import_app_reviews.py"
+APP_CRAWL = PROJECT_ROOT / "scripts" / "mkt" / "crawl" / "reviews" / "crawl_app_reviews.py"
+APP_IMPORT = PROJECT_ROOT / "scripts" / "source_b" / "import_app_reviews.py"
 APP_FILE = PROJECT_ROOT / "data" / "app-reviews" / "live.json"
-IMPORT_MENTIONS = PROJECT_ROOT / "scripts" / "shared" / "import_keyword_mentions.py"
-CLASSIFY_TOPICS = PROJECT_ROOT / "scripts" / "marketing" / "classify" / "classify_mention_topics.py"
-BUILD_CAMPAIGN = PROJECT_ROOT / "scripts" / "marketing" / "classify" / "build_campaign_tracking.py"
-RECOMPUTE_METRICS = PROJECT_ROOT / "scripts" / "marketing" / "metrics" / "recompute_daily_brand_metrics.py"
+IMPORT_MENTIONS = PROJECT_ROOT / "scripts" / "source_b" / "import_keyword_mentions.py"
+CLASSIFY_TOPICS = PROJECT_ROOT / "scripts" / "mkt" / "classify" / "classify_mention_topics.py"
+BUILD_CAMPAIGN = PROJECT_ROOT / "scripts" / "mkt" / "classify" / "build_campaign_tracking.py"
+RECOMPUTE_METRICS = PROJECT_ROOT / "scripts" / "mkt" / "metrics" / "recompute_daily_brand_metrics.py"
 SCHEMA_SQL = PROJECT_ROOT / "sql" / "galaxy_mkt_schema.sql"
 
 PLATFORMS = [
