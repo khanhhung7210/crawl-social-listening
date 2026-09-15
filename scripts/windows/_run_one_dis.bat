@@ -2,8 +2,8 @@
 setlocal EnableExtensions
 chcp 65001 >nul
 
-REM Helper: 1 platform DIS trong 1 cua so. Goi tu run_crawl_dis_windows.bat
-REM Usage: _run_one_dis.bat <platform> [--all-active|--film slug] [--import-db|--no-import-db] ...
+REM Helper: 1 platform DIS trong 1 cua so.
+REM Usage: _run_one_dis.bat <platform> [--all-active|--film slug] [--import-db] ...
 
 cd /d "%~dp0..\.."
 
@@ -12,31 +12,28 @@ set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
 set "PY=py -3"
 
-set "PLATFORM=%~1"
-if "%PLATFORM%"=="" (
+if "%~1"=="" (
   echo [ERROR] Thieu platform
   pause
   exit /b 1
 )
-shift
-set "EXTRA=%*"
 
 echo ========================================
-echo   DIS platform=%PLATFORM%
+echo   DIS platform=%~1
 echo   Folder: %CD%
 echo ========================================
 echo.
-echo [RUN] %PY% scripts\dis\run_by_platform.py %PLATFORM% %EXTRA%
+echo [RUN] %PY% scripts\dis\run_by_platform.py %*
 echo.
 
-%PY% scripts\dis\run_by_platform.py %PLATFORM% %EXTRA%
+%PY% scripts\dis\run_by_platform.py %*
 set "ERR=%ERRORLEVEL%"
 
 echo.
 if "%ERR%"=="0" (
-  echo [OK] Xong DIS platform=%PLATFORM%
+  echo [OK] Xong DIS platform=%~1
 ) else (
-  echo [FAIL] DIS platform=%PLATFORM% exit=%ERR%
+  echo [FAIL] DIS platform=%~1 exit=%ERR%
 )
 echo.
 pause
