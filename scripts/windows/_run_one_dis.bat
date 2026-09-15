@@ -2,8 +2,8 @@
 setlocal EnableExtensions
 chcp 65001 >nul
 
-REM Helper: 1 platform DIS trong 1 cua so.
-REM Usage: _run_one_dis.bat <platform> [--all-active|--film slug] [--import-db] ...
+REM DIS continuous — 1 platform / cua so, --all-active, loop vo han.
+REM Usage: _run_one_dis.bat <platform>
 
 cd /d "%~dp0..\.."
 
@@ -20,19 +20,20 @@ if "%~1"=="" (
 )
 
 echo ========================================
-echo   DIS platform=%~1
+echo   DIS CONTINUOUS platform=%~1
+echo   Ctrl+C de dung
 echo   Folder: %CD%
 echo ========================================
 echo.
-echo [RUN] %PY% scripts\dis\run_by_platform.py %*
+echo [RUN] %PY% scripts\dis\run_by_platform.py %~1 --all-active --import-db --continue-on-error --continuous --sleep 180
 echo.
 
-%PY% scripts\dis\run_by_platform.py %*
+%PY% scripts\dis\run_by_platform.py %~1 --all-active --import-db --continue-on-error --continuous --sleep 180
 set "ERR=%ERRORLEVEL%"
 
 echo.
 if "%ERR%"=="0" (
-  echo [OK] Xong DIS platform=%~1
+  echo [OK] Stopped DIS platform=%~1
 ) else (
   echo [FAIL] DIS platform=%~1 exit=%ERR%
 )

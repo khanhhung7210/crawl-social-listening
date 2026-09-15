@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 chcp 65001 >nul
 
-REM DIS film news ^(all active^) + import DB — khong can Chrome
+REM DIS film news continuous — all active films, loop vo han
 
 cd /d "%~dp0..\.."
 
@@ -13,22 +13,19 @@ set "PY=py -3"
 set "CHROMEDRIVER_PATH="
 
 echo ========================================
-echo   DIS news ^(all active films^)
+echo   DIS-news CONTINUOUS ^(all active^)
+echo   Ctrl+C de dung
 echo   Folder: %CD%
 echo ========================================
 echo.
+
+:loop
+echo.
 echo [RUN] %PY% scripts\dis\crawl\crawl_film_news.py --import-db
+echo       %date% %time%
 echo.
-
 %PY% scripts\dis\crawl\crawl_film_news.py --import-db
-set "ERR=%ERRORLEVEL%"
-
 echo.
-if "%ERR%"=="0" (
-  echo [OK] Xong DIS-news
-) else (
-  echo [FAIL] DIS-news exit=%ERR%
-)
-echo.
-pause
-exit /b %ERR%
+echo [DIS-news] round done exit=%ERRORLEVEL% — sleep 300s...
+timeout /t 300 /nobreak
+goto loop

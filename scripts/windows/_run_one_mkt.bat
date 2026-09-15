@@ -2,8 +2,8 @@
 setlocal EnableExtensions
 chcp 65001 >nul
 
-REM Helper: 1 platform MKT trong 1 cua so.
-REM Usage: _run_one_mkt.bat <platform> [--only-crawl]
+REM MKT continuous — 1 platform / cua so, loop vo han.
+REM Usage: _run_one_mkt.bat <platform>
 
 cd /d "%~dp0..\.."
 
@@ -20,19 +20,20 @@ if "%~1"=="" (
 )
 
 echo ========================================
-echo   MKT platform=%~1
+echo   MKT CONTINUOUS platform=%~1
+echo   Ctrl+C de dung
 echo   Folder: %CD%
 echo ========================================
 echo.
-echo [RUN] %PY% scripts\mkt\run_full_pipeline.py %*
+echo [RUN] %PY% scripts\mkt\run_continuous.py %~1 --import-db --sleep 120
 echo.
 
-%PY% scripts\mkt\run_full_pipeline.py %*
+%PY% scripts\mkt\run_continuous.py %~1 --import-db --sleep 120
 set "ERR=%ERRORLEVEL%"
 
 echo.
 if "%ERR%"=="0" (
-  echo [OK] Xong MKT platform=%~1
+  echo [OK] Stopped MKT platform=%~1
 ) else (
   echo [FAIL] MKT platform=%~1 exit=%ERR%
 )
