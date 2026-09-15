@@ -1,30 +1,24 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 chcp 65001 >nul
 
 REM ============================================================
-REM  Social Listening - Crawl (Windows)
-REM  Clone repo personal, copy .env, double-click this file.
-REM
-REM  Repo: khanhhung7210/crawl-social-listening  (branch socialDotAI)
+REM  Social Listening Crawl Windows
+REM  Double-click = full pipeline MKT + DIS, 1 terminal / platform.
+REM  13 cua so: MKT 6 MXH + news | DIS 5 MXH + news
 REM ============================================================
 
 cd /d "%~dp0"
+set "ROOT=%CD%"
 
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
-
-REM Windows: dung "py" launcher (khong dung "python")
 set "PY=py -3"
 
 where py >nul 2>&1
 if errorlevel 1 (
-  echo [ERROR] Khong tim thay lenh "py" ^(Python Launcher^).
-  echo.
-  echo  Cai Python 3.10+ tu https://www.python.org/downloads/
-  echo  ROI MO CMD MOI, thu:  py -3 --version
-  echo.
+  echo [ERROR] Khong tim thay "py". Cai Python 3.10+ roi mo CMD moi.
   pause
   exit /b 1
 )
@@ -37,89 +31,49 @@ if errorlevel 1 (
 )
 
 if not exist "src\social_listening" (
-  echo [ERROR] Khong thay thu muc src\social_listening
-  echo         Hay chay file nay trong root repo social-listening.
+  echo [ERROR] Chay file nay trong root repo social-listening.
   pause
   exit /b 1
 )
 
 if not exist ".env" (
-  echo [WARN] Chua co file .env
-  if exist ".env.example" (
-    echo        Copy .env.example -^> .env roi dien PGHOST/PGUSER/PGPASSWORD...
-  )
+  echo [WARN] Chua co .env — import/sentiment can Postgres.
   echo.
 )
 
 echo.
 echo ========================================
-echo   Social Listening - Crawl Windows
+echo   MKT + DIS full pipeline ^(13 terminals^)
 echo   Folder: %CD%
-echo   Python: %PY%
 echo ========================================
 echo.
-echo  Chon platform:
-echo    1^) facebook
-echo    2^) tiktok
-echo    3^) threads
-echo    4^) instagram
-echo    5^) youtube
-echo    6^) google_maps
-echo    7^) all ^(tat ca MXH + maps^)
-echo    0^) thoat
+echo [INFO] Chrome ports:
+echo   MKT  Threads:9222 TikTok:9223 IG:9224 YT:9225 FB:9226 Maps:9227
+echo   DIS  Threads:9232 TikTok:9233 IG:9234 YT:9235 FB:9236
+echo   News ^(MKT+DIS^) khong can Chrome
 echo.
-set /p "CHOICE=Nhap so (1-7): "
+echo [RUN] Mo 13 terminal...
+echo.
 
-if "%CHOICE%"=="0" exit /b 0
-if "%CHOICE%"=="1" set "PLATFORM=facebook"
-if "%CHOICE%"=="2" set "PLATFORM=tiktok"
-if "%CHOICE%"=="3" set "PLATFORM=threads"
-if "%CHOICE%"=="4" set "PLATFORM=instagram"
-if "%CHOICE%"=="5" set "PLATFORM=youtube"
-if "%CHOICE%"=="6" set "PLATFORM=google_maps"
-if "%CHOICE%"=="7" set "PLATFORM=all"
-
-if not defined PLATFORM (
-  echo [ERROR] Lua chon khong hop le.
-  pause
-  exit /b 1
+echo --- MKT ^(7^) ---
+for %%P in (facebook tiktok threads instagram youtube google_maps) do (
+  echo   - MKT-%%P
+  start "MKT-%%P" cmd /k call "%ROOT%\scripts\windows\_run_one_mkt.bat" "%%P"
 )
+echo   - MKT-news
+start "MKT-news" cmd /k call "%ROOT%\scripts\windows\_run_one_mkt_news.bat"
 
 echo.
-echo  Che do:
-echo    1^) Full = crawl + filter + import DB + sentiment ^(khuyen nghi^)
-echo    2^) Chi crawl/filter ^(khong import DB^)  [--only-crawl]
-echo.
-set /p "MODE=Nhap so (1-2, mac dinh 1): "
-if "%MODE%"=="" set "MODE=1"
-
-set "EXTRA="
-if "%MODE%"=="2" set "EXTRA=--only-crawl"
-
-echo.
-echo [INFO] Can Chrome debug dang mo ^(port theo platform^).
-echo        Facebook :9226  TikTok :9223  Threads :9222
-echo        Instagram :9224 YouTube :9225  Maps :9227
-echo.
-echo [RUN] %PY% scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
-echo.
-
-%PY% scripts\mkt\run_full_pipeline.py %PLATFORM% %EXTRA%
-set "ERR=%ERRORLEVEL%"
-
-echo.
-if "%ERR%"=="0" (
-  echo [OK] Xong platform=%PLATFORM%
-  if "%MODE%"=="1" (
-    echo       Da import DB + gan sentiment ^(neu .env Postgres OK^).
-  ) else (
-    echo       Chi co file JSON. Import sau:
-    echo       %PY% scripts\source_b\import_keyword_mentions.py --film galaxy_cinema
-  )
-) else (
-  echo [FAIL] Exit code %ERR%
+echo --- DIS ^(6^) ---
+for %%P in (facebook tiktok threads instagram youtube) do (
+  echo   - DIS-%%P
+  start "DIS-%%P" cmd /k call "%ROOT%\scripts\windows\_run_one_dis.bat" "%%P" --all-active --import-db --continue-on-error
 )
+echo   - DIS-news
+start "DIS-news" cmd /k call "%ROOT%\scripts\windows\_run_one_dis_news.bat"
 
+echo.
+echo [OK] Da mo 13 cua so. Co the dong cua so nay.
 echo.
 pause
-exit /b %ERR%
+exit /b 0
