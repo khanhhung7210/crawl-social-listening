@@ -50,6 +50,7 @@ APP_IMPORT = PROJECT_ROOT / "scripts" / "source_b" / "import_app_reviews.py"
 APP_FILE = PROJECT_ROOT / "data" / "app-reviews" / "live.json"
 IMPORT_MENTIONS = PROJECT_ROOT / "scripts" / "source_b" / "import_keyword_mentions.py"
 CLASSIFY_TOPICS = PROJECT_ROOT / "scripts" / "mkt" / "classify" / "classify_mention_topics.py"
+CLASSIFY_GIFT_LEADS = PROJECT_ROOT / "scripts" / "mkt" / "classify" / "classify_gift_leads.py"
 BUILD_CAMPAIGN = PROJECT_ROOT / "scripts" / "mkt" / "classify" / "build_campaign_tracking.py"
 RECOMPUTE_METRICS = PROJECT_ROOT / "scripts" / "mkt" / "metrics" / "recompute_daily_brand_metrics.py"
 SCHEMA_SQL = PROJECT_ROOT / "sql" / "galaxy_mkt_schema.sql"
@@ -79,16 +80,60 @@ def env_python() -> dict[str, str]:
     }
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _parse_lock_pid(text: str) -> int | None:
+    for part in (text or "").replace("\n", " ").split():
+        if part.startswith("pid="):
+            raw = part.split("=", 1)[-1].strip()
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+    return None
+
+
 def acquire_lock(platform: str) -> Path:
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     lock = LOCK_DIR / f"{platform}.lock"
     if lock.exists():
         old = lock.read_text(encoding="utf-8").strip()
-        raise SystemExit(
-            f"Already running? Lock exists: {lock}\n"
-            f"  contents: {old}\n"
-            f"  Xóa lock nếu chắc process cũ đã chết: rm {lock}"
-        )
+        old_pid = _parse_lock_pid(old)
+        if old_pid is not None and not _pid_alive(old_pid):
+            print(f"[lock] stale lock removed (dead pid={old_pid}): {lock}", flush=True)
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+        else:
+            raise SystemExit(
+                f"Already running? Lock exists: {lock}\n"
+                f"  contents: {old}\n"
+                f"  Xóa lock nếu chắc process cũ đã chết: rm {lock}"
+            )
     lock.write_text(f"pid={os.getpid()} started={datetime.now().isoformat()}\n", encoding="utf-8")
 
     def _cleanup() -> None:
@@ -215,6 +260,9 @@ def run_enrich_for_ui(_args: argparse.Namespace | None = None) -> None:
     code = run_py(CLASSIFY_TOPICS, "--brand", "glx")
     if code != 0:
         log("classify_mention_topics failed — CX panels may stay empty")
+    gift_code = run_py(CLASSIFY_GIFT_LEADS)
+    if gift_code != 0:
+        log("classify_gift_leads failed — Admin gift leads may stay empty")
     run_py(APP_IMPORT, "--reclassify-only")
     run_py(BUILD_CAMPAIGN, "--brand", "glx")
     run_py(RECOMPUTE_METRICS)

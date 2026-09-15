@@ -68,14 +68,61 @@ def env_python(platform: str | None = None) -> dict[str, str]:
     return env
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            # PROCESS_QUERY_LIMITED_INFORMATION — enough to detect existence
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _parse_lock_pid(text: str) -> int | None:
+    for part in (text or "").replace("\n", " ").split():
+        if part.startswith("pid="):
+            raw = part.split("=", 1)[-1].strip()
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+    return None
+
+
 def acquire_lock(name: str) -> Path:
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     lock = LOCK_DIR / f"dis-{name}.lock"
     if lock.exists():
         old = lock.read_text(encoding="utf-8").strip()
-        raise SystemExit(
-            f"Already running? Lock: {lock}\n  {old}\n  rm {lock} nếu process cũ đã chết"
-        )
+        old_pid = _parse_lock_pid(old)
+        if old_pid is not None and not _pid_alive(old_pid):
+            print(f"[lock] stale lock removed (dead pid={old_pid}): {lock}", flush=True)
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+        else:
+            raise SystemExit(
+                f"Already running? Lock: {lock}\n  {old}\n"
+                f"  rm {lock} nếu process cũ đã chết"
+            )
     lock.write_text(f"pid={os.getpid()} started={datetime.now().isoformat()}\n", encoding="utf-8")
 
     def _cleanup() -> None:
