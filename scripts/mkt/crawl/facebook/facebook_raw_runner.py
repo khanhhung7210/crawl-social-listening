@@ -493,6 +493,8 @@ def main(force: bool = False, *, flush_brand: bool | None = None, flush_import: 
         finally:
             leave_chrome_open(driver)
 
+
+def search_posts_for_keyword(driver: webdriver.Chrome, keyword: str) -> dict:
     load_search_results(driver, keyword)
 
     urls: list[str] = []
