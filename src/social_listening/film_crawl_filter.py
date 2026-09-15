@@ -26,8 +26,9 @@ def current_film_slug() -> str:
 def passes_film_relevance(text: str, keyword_matches: list[str] | None = None) -> bool:
     """True when post/comment text is about the current film (DIS only).
 
-    Crawl keyword hits (#TinNguyen, #ThuTrang…) are intentionally ignored — they
-    are too broad and caused cast-only noise in Distribution exports.
+    Crawl keyword hits (Huỳnh Lập, #TinNguyen, #ThuTrang…) are intentionally
+    ignored here — they are discovery-only and must not assign film_id without
+    a core film signal in the content text.
     """
     del keyword_matches
     if not is_distribution_crawl():

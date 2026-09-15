@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from social_listening.film_classify import classify_intent, detect_sentiment
-from social_listening.film_rules import clear_alias_cache, detect_film_slugs
+from social_listening.film_rules import (
+    _build_detect_config,
+    clear_alias_cache,
+    detect_film_slugs,
+    film_relevant_for_slug,
+    match_is_core_identifier,
+    normalize,
+)
+
+_SCRIPTS_DIS = Path(__file__).resolve().parents[1] / "scripts" / "dis"
+if str(_SCRIPTS_DIS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIS))
+
 
 
 class FilmSentimentTest(unittest.TestCase):
@@ -146,6 +161,118 @@ class FilmDetectTest(unittest.TestCase):
             "conan_thien_than_sa_nga_tren_xa_lo",
             detect_film_slugs("Quái Xế Đen trong Conan phần mới"),
         )
+
+
+class FilmDiscoveryKeywordRelevanceTest(unittest.TestCase):
+    """CASE A–D: title vs person discovery keywords must not auto-assign film_id."""
+
+    SLUG = "nghi_he_so_nghi_huu"
+    TITLE = "Nghỉ Hè Sợ Nghỉ Hưu"
+    PERSON = "Huỳnh Lập"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        clear_alias_cache()
+        cls._cfg = _build_detect_config(
+            cls.SLUG,
+            title=cls.TITLE,
+            aliases=[
+                "Nghỉ Hè Sợ Nghỉ Hưu",
+                "#NghiHeSoNghiHuu",
+                "#PhimHuynhLap2026",
+                "#HuynhLap",  # person hashtag — must be demoted to discovery
+            ],
+            payload={
+                "core_keywords": [cls.TITLE],
+                "keywords": [cls.TITLE, cls.PERSON],
+                "hashtags": ["#NghiHeSoNghiHuu", "#HuynhLap"],
+                "discovery_keywords": [cls.PERSON],
+            },
+        )
+
+    def setUp(self) -> None:
+        clear_alias_cache()
+        self._patcher = patch(
+            "social_listening.film_rules.load_film_detect_configs",
+            return_value=[self._cfg],
+        )
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        clear_alias_cache()
+
+    def test_case_a_title_keyword_mentions_film(self) -> None:
+        """CASE A: film title keyword + content mentions film → ACCEPT."""
+        text = "Trailer Nghỉ Hè Sợ Nghỉ Hưu mới ra rạp cuối tuần này"
+        slugs = detect_film_slugs(text, [self.TITLE])
+        self.assertIn(self.SLUG, slugs)
+        self.assertTrue(film_relevant_for_slug(text, self.SLUG))
+
+    def test_case_b_person_keyword_and_film_in_text(self) -> None:
+        """CASE B: person discovery keyword but text also names the film → ACCEPT."""
+        text = "Huỳnh Lập đóng chính Nghỉ Hè Sợ Nghỉ Hưu, trailer hay quá"
+        slugs = detect_film_slugs(text, [self.PERSON])
+        self.assertIn(self.SLUG, slugs)
+        self.assertTrue(film_relevant_for_slug(text, self.SLUG))
+
+    def test_case_c_person_keyword_other_film_only(self) -> None:
+        """CASE C: person keyword hit about another Huỳnh Lập film → REJECT."""
+        text = "Xem lại phim Nhà Gia Tiên của Huỳnh Lập vẫn hay và cảm động"
+        slugs = detect_film_slugs(text, [self.PERSON])
+        self.assertNotIn(self.SLUG, slugs)
+        self.assertFalse(film_relevant_for_slug(text, self.SLUG))
+
+    def test_case_d_person_keyword_general_only(self) -> None:
+        """CASE D: person keyword hit with no film connection → REJECT."""
+        text = "Huỳnh Lập sống tình cảm lắm luôn, nhìn món quà là biết"
+        slugs = detect_film_slugs(text, [self.PERSON])
+        self.assertNotIn(self.SLUG, slugs)
+        self.assertFalse(film_relevant_for_slug(text, self.SLUG))
+
+    def test_person_hashtag_alone_rejected(self) -> None:
+        text = "Chú Đông Hùng bưng anh Huỳnh Lập cái 1 #HuynhLap #DongHung"
+        self.assertNotIn(self.SLUG, detect_film_slugs(text, [self.PERSON, "#HuynhLap"]))
+
+    def test_path_keyword_person_not_core(self) -> None:
+        self.assertFalse(match_is_core_identifier(self.PERSON, self.SLUG))
+        self.assertTrue(match_is_core_identifier(self.TITLE, self.SLUG))
+        self.assertFalse(match_is_core_identifier("#HuynhLap", self.SLUG))
+        self.assertTrue(match_is_core_identifier("#NghiHeSoNghiHuu", self.SLUG))
+
+    def test_path_plus_keyword_rejects_person_discovery(self) -> None:
+        from import_film_mentions import resolve_films_for_text
+
+        film_map = {self.SLUG: "film-uuid"}
+        # Empty text + person crawl keyword under film folder → must skip
+        detected, method = resolve_films_for_text("", [self.PERSON], self.SLUG, film_map)
+        self.assertEqual(detected, [])
+        self.assertEqual(method, "skip-path")
+        # Title crawl keyword under film folder → accept (core match folded into detect)
+        detected, method = resolve_films_for_text("", [self.TITLE], self.SLUG, film_map)
+        self.assertEqual([s.lower() for s in detected], [self.SLUG])
+        self.assertIn(method, {"path+keyword", "path+alias"})
+
+
+class DbCoreKeywordsNotMergedTest(unittest.TestCase):
+    def test_build_keeps_person_out_of_core(self) -> None:
+        cfg = _build_detect_config(
+            "nghi_he_so_nghi_huu",
+            title="Nghỉ Hè Sợ Nghỉ Hưu",
+            aliases=["#HuynhLap", "#NghiHeSoNghiHuu"],
+            payload={
+                "core_keywords": ["Nghỉ Hè Sợ Nghỉ Hưu", "Huỳnh Lập"],
+                "keywords": ["Nghỉ Hè Sợ Nghỉ Hưu", "Huỳnh Lập"],
+            },
+        )
+        self.assertIsNotNone(cfg)
+        assert cfg is not None
+        self.assertIn("nghi he so nghi huu", cfg.core_norms)
+        self.assertNotIn("huynh lap", cfg.core_norms)
+        self.assertNotIn("#huynhlap", cfg.core_norms)
+        modes = {normalize(r): m for r, _, m in cfg.terms}
+        self.assertEqual(modes.get("huynh lap"), "discovery")
+        self.assertEqual(modes.get("#huynhlap"), "discovery")
 
 
 if __name__ == "__main__":
