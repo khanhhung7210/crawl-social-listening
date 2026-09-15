@@ -15,32 +15,23 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%CD%\src"
 
-REM Tim Python: Windows thuong co "py" launcher, khong phai "python"
-set "PY="
-where py >nul 2>&1 && set "PY=py -3"
-if not defined PY where python >nul 2>&1 && set "PY=python"
-if not defined PY where python3 >nul 2>&1 && set "PY=python3"
+REM Windows: dung "py" launcher (khong dung "python")
+set "PY=py -3"
 
-if not defined PY (
-  echo [ERROR] Khong tim thay Python trong PATH.
+where py >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Khong tim thay lenh "py" ^(Python Launcher^).
   echo.
-  echo  Thu 1 trong cac cach:
-  echo    1^) Mo "Manage App Execution Aliases" ^(Windows Settings^)
-  echo       tat "python.exe" / "python3.exe" alias ^(neu dang bat^)
-  echo    2^) Cai Python 3.10+ tu https://www.python.org/downloads/
-  echo       QUAN TRONG: tick "Add python.exe to PATH"
-  echo    3^) Hoac cai tu Microsoft Store, roi mo CMD moi go:  py -3 --version
-  echo.
-  echo  Sau khi cai xong: dong cua so nay, mo lai run_crawl_windows.bat
+  echo  Cai Python 3.10+ tu https://www.python.org/downloads/
+  echo  ROI MO CMD MOI, thu:  py -3 --version
   echo.
   pause
   exit /b 1
 )
 
-REM Kiem tra version
 %PY% --version
 if errorlevel 1 (
-  echo [ERROR] Lenh "%PY%" khong chay duoc.
+  echo [ERROR] "py -3" khong chay duoc. Thu: py --list
   pause
   exit /b 1
 )
