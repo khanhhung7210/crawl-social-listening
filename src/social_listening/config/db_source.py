@@ -125,6 +125,56 @@ def _load_exclude_rules(cur) -> list[str]:
     return _dedupe(terms)
 
 
+def _merge_gift_leads_keywords(cur, payload: dict[str, Any]) -> None:
+    """Append process-tagged gift_leads keywords from generic listening_queries."""
+    cur.execute(
+        """
+        SELECT keywords
+        FROM listening_queries
+        WHERE query_type = 'generic'
+          AND query_name = 'gift_leads'
+          AND is_active = TRUE
+        LIMIT 1
+        """
+    )
+    row = cur.fetchone()
+    if not row:
+        return
+    keywords = row[0]
+    if not isinstance(keywords, list) or not keywords:
+        return
+
+    existing = payload.get("keywords")
+    if not isinstance(existing, list):
+        existing = []
+        payload["keywords"] = existing
+
+    seen = set()
+    for item in existing:
+        if isinstance(item, dict):
+            key = str(item.get("value") or item.get("keyword") or "").strip().lower()
+        else:
+            key = str(item or "").strip().lower()
+        if key:
+            seen.add(key)
+
+    for item in keywords:
+        if isinstance(item, dict):
+            key = str(item.get("value") or item.get("keyword") or "").strip().lower()
+            if not key or key in seen:
+                continue
+            existing.append(item)
+            seen.add(key)
+        else:
+            key = str(item or "").strip().lower()
+            if not key or key in seen:
+                continue
+            existing.append(
+                {"value": str(item).strip(), "processes": ["gift_leads"], "match": "contains"}
+            )
+            seen.add(key)
+
+
 def _append_cinemas(cur, payload: dict[str, Any]) -> None:
     cur.execute(
         """
@@ -181,6 +231,7 @@ def _load_mkt_payload() -> dict[str, Any]:
         brand_row_count = int(cur.fetchone()[0] or 0)
         if aggregate is not None and brand_row_count == 0:
             _append_cinemas(cur, aggregate)
+            _merge_gift_leads_keywords(cur, aggregate)
             exclude = _load_exclude_rules(cur)
             if exclude:
                 aggregate["exclude_keywords"] = _dedupe(
@@ -201,7 +252,7 @@ def _load_mkt_payload() -> dict[str, Any]:
         rows = cur.fetchall()
         if not rows:
             raise DbConfigEmptyError(
-                "No listening_queries in DB. Run scripts/shared/seed_listening_config.py "
+                "No listening_queries in DB. Run scripts/source_b/seed_listening_config.py "
                 "or set SOCIAL_CONFIG_SOURCE=file"
             )
 
@@ -242,6 +293,7 @@ def _load_mkt_payload() -> dict[str, Any]:
             payload[key] = _dedupe(payload[key])
 
         _append_cinemas(cur, payload)
+        _merge_gift_leads_keywords(cur, payload)
 
         exclude = _load_exclude_rules(cur)
         if exclude:
@@ -272,7 +324,7 @@ def _load_film_payload(film_slug: str) -> dict[str, Any]:
         row = cur.fetchone()
         if not row:
             raise RuntimeError(
-                f"Film slug not found in DB: {slug}. Run scripts/distribution/seed_films.py"
+                f"Film slug not found in DB: {slug}. Run scripts/dis/seed_films.py"
             )
 
         keywords, hashtags, metadata, film_title, is_active = row
@@ -298,11 +350,16 @@ def _load_film_payload(film_slug: str) -> dict[str, Any]:
             meta = metadata if isinstance(metadata, dict) else {}
             full = meta.get("full_payload") if isinstance(meta.get("full_payload"), dict) else {}
             kw_vals = _dedupe(_term_values(keywords) + _term_values(full.get("keywords")))
+            # Core identifiers only — never fold crawl/person keywords into core.
+            # Broad terms like "Huỳnh Lập" stay in keywords for discovery crawl,
+            # but must not auto-assign results to this film_id.
             core_vals = _dedupe(
                 _term_values(meta.get("core_keywords"))
                 + _term_values(full.get("core_keywords"))
-                + kw_vals
             )
+            if not core_vals:
+                title_fallback = str(film_title or full.get("film_title") or slug).strip()
+                core_vals = [title_fallback] if title_fallback else []
             payload = {
                 "film_title": film_title or str(full.get("film_title") or slug),
                 "film_slug": slug,

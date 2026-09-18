@@ -16,7 +16,9 @@ scripts/
 │   ├── run_continuous.py          # treo terminal MKT
 │   ├── run_full_pipeline.py       # crawl → filter → import 1 platform
 │   ├── crawl/                     # facebook, tiktok, threads, …
-│   ├── classify/                  # campaign / CX topic / media_type
+│   ├── classify/                  # campaign / CX topic / media_type / gift_leads
+│   ├── seed_gift_leads_config.py  # seed listening_queries process gift_leads
+│   ├── run_gift_leads_pipeline.py # crawl FB/Threads + classify gift leads
 │   └── metrics/                   # daily_brand_metrics
 ├── dis/                           # Source A — Distribution (phim)
 │   ├── run_by_platform.py
@@ -36,6 +38,29 @@ scripts/
 ```
 
 Hot News / Sentiment **không** tách folder crawl — cùng stream mention, classify/aggregate sau.
+
+## Gift Lead Gen (Admin sales leads)
+
+Outbound list DN/cá nhân có nhu cầu tặng quà cao cấp (bánh trung thu, giỏ quà Tết…).
+
+```bash
+# 1) Seed keywords + ensure gift_leads table (1 lần)
+PYTHONPATH=src python3 scripts/mkt/seed_gift_leads_config.py
+
+# 2) Config keyword trên UI: Admin → Gift Leads → Keyword crawl Gift Leads
+
+# 3) Crawl liên tục (1 terminal / platform — giống MKT/DIS)
+PYTHONPATH=src python3 scripts/mkt/run_continuous_gift_leads.py --platform facebook
+PYTHONPATH=src python3 scripts/mkt/run_continuous_gift_leads.py --platform threads
+
+# One-shot (không loop)
+PYTHONPATH=src python3 scripts/mkt/run_gift_leads_pipeline.py
+
+# Chỉ classify lại từ mentions đã có
+PYTHONPATH=src python3 scripts/mkt/classify/classify_gift_leads.py --days 180
+```
+
+Dashboard: Admin → **Gift Leads** (RBAC screen `gift_leads`) — keyword config nằm **trong trang này**, không chung Settings Brand/Phim.
 
 ## Pipeline tổng quan
 

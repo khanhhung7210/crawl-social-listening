@@ -287,6 +287,10 @@ def normalize_term_value(value, value_fields: tuple[str, ...] = ("value", "keywo
     return str(value or "").strip()
 
 
+# Processes that only run explicitly tagged terms (skip unscoped brand keywords).
+STRICT_PROCESSES = frozenset({"gift_leads"})
+
+
 def is_term_enabled(value, active_process: str) -> bool:
     if isinstance(value, dict):
         enabled = value.get("enabled")
@@ -295,10 +299,16 @@ def is_term_enabled(value, active_process: str) -> bool:
 
         processes = normalize_processes(value.get("processes", value.get("process")))
         if not processes:
+            # Unscoped terms: always on for marketing; off for strict processes.
+            if active_process in STRICT_PROCESSES:
+                return False
             return True
         if not active_process:
             return False
         return active_process in processes or "*" in processes or "all" in processes
+    # Plain string terms are unscoped
+    if active_process in STRICT_PROCESSES:
+        return False
     return True
 
 
